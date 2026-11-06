@@ -1,0 +1,1807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complaint Management System</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- AUTHENTICATION OVERLAY / VIEW -->
+    <div id="auth-container" class="auth-wrapper" style="display: none;">
+        <div class="auth-card">
+            <div class="auth-header">
+                <div class="auth-logo">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <path d="M12 8v4"/>
+                        <path d="M12 16h.01"/>
+                    </svg>
+                </div>
+                <h2>Complaint Management System</h2>
+                <p id="auth-subtitle">Sign in to lodge or track complaints</p>
+            </div>
+
+            <!-- Login Form -->
+            <form id="login-form" class="auth-form">
+                <div class="form-group">
+                    <label for="login-email">Email Address</label>
+                    <input type="email" id="login-email" required placeholder="name@example.com" autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block" id="login-submit-btn">
+                    <span>Sign In</span>
+                </button>
+                <div class="auth-toggle">
+                    <span>Don't have an account?</span>
+                    <a href="#" id="toggle-register-link">Register here</a>
+                </div>
+            </form>
+
+            <!-- First-Run Admin Setup Form -->
+            <form id="setup-admin-form" class="auth-form" style="display: none;">
+                <div class="setup-notice" style="background: rgba(37, 99, 235, 0.08); border: 1px solid #93c5fd; border-radius: 6px; padding: 12px; margin-bottom: 16px; font-size: 0.85rem; color: #1e3a8a;">
+                    <strong>First-Time Setup:</strong> No administrator account exists yet. Create the initial Super Administrator account to configure and access the system.
+                </div>
+                <div class="form-group">
+                    <label for="setup-name">Administrator Full Name</label>
+                    <input type="text" id="setup-name" required placeholder="e.g. System Administrator">
+                </div>
+                <div class="form-group">
+                    <label for="setup-email">Administrator Email</label>
+                    <input type="email" id="setup-email" required placeholder="admin@organization.com">
+                </div>
+                <div class="form-group">
+                    <label for="setup-password">Admin Password</label>
+                    <input type="password" id="setup-password" required placeholder="Minimum 8 characters" minlength="8">
+                </div>
+                <div class="form-group">
+                    <label for="setup-password-confirm">Confirm Password</label>
+                    <input type="password" id="setup-password-confirm" required placeholder="Re-enter password" minlength="8">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block" id="setup-submit-btn">
+                    <span>Provision Super Administrator</span>
+                </button>
+            </form>
+
+            <!-- Register Form -->
+            <form id="register-form" class="auth-form" style="display: none;">
+                <div class="form-group">
+                    <label for="reg-name">Full Name</label>
+                    <input type="text" id="reg-name" required placeholder="John Doe">
+                </div>
+                <div class="form-group">
+                    <label for="reg-email">Email Address</label>
+                    <input type="email" id="reg-email" required placeholder="john@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="reg-dept">Department / Division</label>
+                    <select id="reg-dept">
+                        <option value="General">General / Citizen</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="reg-password">Password</label>
+                    <input type="password" id="reg-password" required placeholder="Minimum 6 characters" minlength="6">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block" id="reg-submit-btn">
+                    <span>Create Account</span>
+                </button>
+                <div class="auth-toggle">
+                    <span>Already have an account?</span>
+                    <a href="#" id="toggle-login-link">Sign In here</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MAIN APP SHELL -->
+    <div id="app-shell" class="app-layout" style="display: none;">
+        
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="app-brand">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <path d="M12 8v4"/>
+                        <path d="M12 16h.01"/>
+                    </svg>
+                    <span>CMS Portal</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="#dashboard" class="nav-item active" data-view="dashboard">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"/>
+                        <rect x="14" y="3" width="7" height="7"/>
+                        <rect x="14" y="14" width="7" height="7"/>
+                        <rect x="3" y="14" width="7" height="7"/>
+                    </svg>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#lodge" class="nav-item" data-view="lodge">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="16"/>
+                        <line x1="8" y1="12" x2="16" y2="12"/>
+                    </svg>
+                    <span>Lodge Complaint</span>
+                </a>
+                <a href="#my-complaints" class="nav-item" data-view="my-complaints">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                    <span>My Complaints</span>
+                </a>
+                <a href="#reports" class="nav-item" data-view="reports">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="20" x2="18" y2="10"/>
+                        <line x1="12" y1="20" x2="12" y2="4"/>
+                        <line x1="6" y1="20" x2="6" y2="14"/>
+                    </svg>
+                    <span>Reports &amp; Analytics</span>
+                </a>
+
+                <!-- Staff & Admin Only -->
+                <div class="nav-section-title staff-only" style="display: none;">STAFF WORKSPACE</div>
+                <a href="#manage" class="nav-item staff-only" data-view="manage" style="display: none;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                        <polyline points="2 17 12 22 22 17"/>
+                        <polyline points="2 12 12 17 22 12"/>
+                    </svg>
+                    <span>Manage Complaints</span>
+                </a>
+
+                <!-- Admin Only -->
+                <div class="nav-section-title admin-only" style="display: none;">ADMINISTRATION</div>
+                <a href="#settings" class="nav-item admin-only" data-view="settings" style="display: none;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                    <span>Users & Settings</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="system-status-pill" id="system-status-indicator">
+                    <span class="status-dot"></span>
+                    <span id="system-status-text">Checking Google DB...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT AREA -->
+        <div class="main-wrapper">
+            <!-- Top Navbar -->
+            <header class="topbar">
+                <div class="topbar-title">
+                    <h1 id="page-heading">Dashboard</h1>
+                </div>
+                <div class="topbar-user">
+                    <div class="user-info">
+                        <div class="user-name" id="user-display-name">-</div>
+                        <div class="user-role-badge" id="user-display-role">-</div>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" id="logout-btn">Logout</button>
+                </div>
+            </header>
+
+            <!-- Dynamic Views -->
+            <main class="content-container">
+
+                <!-- 1. DASHBOARD VIEW -->
+                <section id="view-dashboard" class="view-panel">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Total Complaints</div>
+                            <div class="stat-val" id="stat-total">0</div>
+                            <div class="stat-sub">Tracked in Google Sheets</div>
+                        </div>
+                        <div class="stat-card stat-pending">
+                            <div class="stat-label">Pending / Under Review</div>
+                            <div class="stat-val" id="stat-pending">0</div>
+                            <div class="stat-sub">Awaiting action</div>
+                        </div>
+                        <div class="stat-card stat-progress">
+                            <div class="stat-label">In Progress</div>
+                            <div class="stat-val" id="stat-progress">0</div>
+                            <div class="stat-sub">Being resolved</div>
+                        </div>
+                        <div class="stat-card stat-resolved">
+                            <div class="stat-label">Resolved</div>
+                            <div class="stat-val" id="stat-resolved">0</div>
+                            <div class="stat-sub">Successfully closed</div>
+                        </div>
+                    </div>
+
+                    <div class="panel-card" style="margin-top: 24px;">
+                        <div class="panel-header">
+                            <h3>Recent Complaints</h3>
+                            <button class="btn btn-primary btn-sm" onclick="switchView('lodge')">+ Lodge Complaint</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Complaint ID</th>
+                                        <th>Subject</th>
+                                        <th>Department</th>
+                                        <th>Priority</th>
+                                        <th>Status</th>
+                                        <th>Date</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dashboard-recent-table">
+                                    <tr><td colspan="7" class="text-center py-4 text-muted">Loading complaints...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. LODGE COMPLAINT VIEW -->
+                <section id="view-lodge" class="view-panel" style="display: none;">
+                    <div class="panel-card form-card" style="max-width: 900px;">
+                        <div class="panel-header">
+                            <div>
+                                <h3>Lodge a New Complaint</h3>
+                                <p class="text-muted">Enter complaint and customer information below. All 21 fields are persisted in Google Sheets.</p>
+                            </div>
+                        </div>
+                        <form id="lodge-complaint-form">
+                            <!-- Section 1: Customer & Sales Details -->
+                            <div class="form-section-title">
+                                <span>1. Customer & Sales Details</span>
+                            </div>
+                            <div class="form-row-3">
+                                <div class="form-group">
+                                    <label for="comp-customer-name">Customer Name <span class="required">*</span></label>
+                                    <input type="text" id="comp-customer-name" required placeholder="Full Name">
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-customer-mobile">Customer Mobile No.</label>
+                                    <input type="tel" id="comp-customer-mobile" placeholder="+91 98765 43210">
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-invoice-no">Invoice No.</label>
+                                    <input type="text" id="comp-invoice-no" placeholder="INV-2026-001">
+                                </div>
+                            </div>
+                            <div class="form-row-3">
+                                <div class="form-group">
+                                    <label for="comp-date">Complain Date <span class="required">*</span></label>
+                                    <input type="date" id="comp-date" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-employee-name">Employee Name</label>
+                                    <input type="text" id="comp-employee-name" placeholder="Staff registering complaint">
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-salesperson-name">Salesperson Name</label>
+                                    <input type="text" id="comp-salesperson-name" placeholder="Sales rep name">
+                                </div>
+                            </div>
+
+                            <!-- Section 2: Classification & Department -->
+                            <div class="form-section-title">
+                                <span>2. Classification & Department</span>
+                            </div>
+                            <div class="form-row-3">
+                                <div class="form-group">
+                                    <label>Department Name(s) <span class="required">*</span></label>
+                                    <div class="multi-select-container" id="lodge-dept-multi-select">
+                                        <button type="button" class="multi-select-toggle" id="lodge-dept-toggle" onclick="toggleMultiSelect('lodge')">
+                                            <span class="multi-select-label" id="lodge-dept-label">Select Department(s)...</span>
+                                            <span class="multi-select-arrow">&#9662;</span>
+                                        </button>
+                                        <div class="multi-select-dropdown" id="lodge-dept-dropdown" style="display: none;">
+                                            <div class="multi-select-header">
+                                                <input type="text" class="multi-select-search" id="lodge-dept-search" placeholder="Search departments..." oninput="filterMultiSelectOptions('lodge')">
+                                                <div class="multi-select-actions">
+                                                    <button type="button" class="btn-link-action" onclick="selectAllDepartments('lodge')">Select All</button>
+                                                    <span class="action-sep">|</span>
+                                                    <button type="button" class="btn-link-action" onclick="clearAllDepartments('lodge')">Clear All</button>
+                                                </div>
+                                            </div>
+                                            <div class="multi-select-options" id="lodge-dept-options">
+                                                <div class="text-muted p-2">Loading departments...</div>
+                                            </div>
+                                        </div>
+                                        <input type="hidden" id="comp-dept" name="department_name" required>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-type">Complain Types <span class="required">*</span></label>
+                                    <input type="text" id="comp-type" required placeholder="e.g. Product Defect, Billing, Delivery">
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-priority">Priority <span class="required">*</span></label>
+                                    <select id="comp-priority" required>
+                                        <option value="Low">Low</option>
+                                        <option value="Medium" selected>Medium</option>
+                                        <option value="High">High</option>
+                                        <option value="Urgent">Urgent</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-row-2">
+                                <div class="form-group">
+                                    <label for="comp-category">Category</label>
+                                    <input type="text" id="comp-category" placeholder="e.g. Hardware, Service, Warranty">
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-vendor-name">Vendor Name</label>
+                                    <input type="text" id="comp-vendor-name" placeholder="Manufacturer or Vendor name">
+                                </div>
+                            </div>
+
+                            <!-- Section 3: Complaint Description & Remarks -->
+                            <div class="form-section-title">
+                                <span>3. Complaint Description & Remarks</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="comp-description">Complain Details <span class="required">*</span></label>
+                                <textarea id="comp-description" rows="4" required placeholder="Provide comprehensive description of the issue..."></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="comp-remarks">Remarks</label>
+                                <input type="text" id="comp-remarks" placeholder="Preliminary remarks or observations...">
+                            </div>
+
+                            <!-- Section 4: Resolution & Goods Return (GR) -->
+                            <div class="form-section-title">
+                                <span>4. Resolution & Goods Return (GR) Tracking</span>
+                            </div>
+                            <div class="form-row-3">
+                                <div class="form-group">
+                                    <label for="comp-status">Status</label>
+                                    <select id="comp-status">
+                                        <option value="Submitted" selected>Submitted</option>
+                                        <option value="Under Review">Under Review</option>
+                                        <option value="In Progress">In Progress</option>
+                                        <option value="Resolved">Resolved</option>
+                                        <option value="Closed">Closed</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-handled-by">Handled By</label>
+                                    <input type="text" id="comp-handled-by" placeholder="Support agent / Unassigned" value="Unassigned">
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-closing-date">Closing Date</label>
+                                    <input type="date" id="comp-closing-date">
+                                </div>
+                            </div>
+                            <div class="form-row-2">
+                                <div class="form-group">
+                                    <label for="comp-solution-given">Solution Given</label>
+                                    <textarea id="comp-solution-given" rows="2" placeholder="Resolution provided to customer..."></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-comments">Comments</label>
+                                    <textarea id="comp-comments" rows="2" placeholder="Internal or follow-up notes..."></textarea>
+                                </div>
+                            </div>
+                            <div class="form-row-3">
+                                <div class="form-group">
+                                    <label for="comp-time-taken">Total Time Taken</label>
+                                    <input type="text" id="comp-time-taken" placeholder="Auto-calculated (e.g. 3 days)">
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-gr-amount">GR Amount (₹)</label>
+                                    <input type="number" step="0.01" min="0" id="comp-gr-amount" placeholder="0.00">
+                                </div>
+                                <div class="form-group">
+                                    <label for="comp-gr-date">GR Expected Date</label>
+                                    <input type="date" id="comp-gr-date">
+                                </div>
+                            </div>
+
+                            <!-- Section 5: Attachments -->
+                            <div class="form-section-title">
+                                <span>5. Attachment</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="comp-attachment-link">Google Drive / Cloud Share Link</label>
+                                <input type="url" id="comp-attachment-link" placeholder="https://drive.google.com/file/d/... or any file link">
+                                <small class="text-muted">Direct shared link from Google Drive or cloud storage (recommended).</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="comp-attachment">Direct File Upload</label>
+                                <input type="file" id="comp-attachment" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.txt,.csv,.xlsx">
+                                <div id="lodge-upload-quota-notice" style="margin-top: 6px; font-size: 0.82rem;"></div>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary" id="lodge-submit-btn">
+                                    <span>Submit Complaint Record</span>
+                                </button>
+                                <button type="reset" class="btn btn-secondary">Clear Form</button>
+                            </div>
+                        </form>
+                    </div>
+                </section>
+
+                <!-- 3. MY COMPLAINTS VIEW -->
+                <section id="view-my-complaints" class="view-panel" style="display: none;">
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <div>
+                                <h3>My Complaints</h3>
+                                <p class="text-muted">Complaints submitted by your account</p>
+                            </div>
+                            <div class="table-actions">
+                                <input type="text" id="my-search-input" class="search-input" placeholder="Search by ID, Customer, Mobile, Invoice...">
+                                <select id="my-status-filter" class="filter-select">
+                                    <option value="ALL">All Statuses</option>
+                                    <option value="Submitted">Submitted</option>
+                                    <option value="Under Review">Under Review</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Resolved">Resolved</option>
+                                    <option value="Closed">Closed</option>
+                                </select>
+                                <select id="my-priority-filter" class="filter-select">
+                                    <option value="ALL">All Priorities</option>
+                                    <option value="Low">Low</option>
+                                    <option value="Medium">Medium</option>
+                                    <option value="High">High</option>
+                                    <option value="Urgent">Urgent</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Complaint ID</th>
+                                        <th>Customer</th>
+                                        <th>Invoice No.</th>
+                                        <th>Type / Issue</th>
+                                        <th>Department</th>
+                                        <th>Priority</th>
+                                        <th>Status</th>
+                                        <th>Handled By</th>
+                                        <th>Date</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="my-complaints-table">
+                                    <tr><td colspan="10" class="text-center py-4 text-muted">No complaints found.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. MANAGE COMPLAINTS VIEW (STAFF & ADMIN ONLY) -->
+                <section id="view-manage" class="view-panel" style="display: none;">
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <div>
+                                <h3>Staff Workspace — All Complaints</h3>
+                                <p class="text-muted">Review, filter, edit, assign, and manage all complaint records</p>
+                            </div>
+                            <div class="table-actions">
+                                <input type="text" id="manage-search-input" class="search-input" placeholder="Search ID, Customer, Mobile, Invoice, Vendor...">
+                                <select id="manage-dept-filter" class="filter-select">
+                                    <option value="ALL">All Departments</option>
+                                </select>
+                                <select id="manage-priority-filter" class="filter-select">
+                                    <option value="ALL">All Priorities</option>
+                                    <option value="Low">Low</option>
+                                    <option value="Medium">Medium</option>
+                                    <option value="High">High</option>
+                                    <option value="Urgent">Urgent</option>
+                                </select>
+                                <select id="manage-status-filter" class="filter-select">
+                                    <option value="ALL">All Statuses</option>
+                                    <option value="Submitted">Submitted</option>
+                                    <option value="Under Review">Under Review</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Resolved">Resolved</option>
+                                    <option value="Closed">Closed</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Complaint ID</th>
+                                        <th>Customer</th>
+                                        <th>Invoice No.</th>
+                                        <th>Type / Issue</th>
+                                        <th>Department</th>
+                                        <th>Priority</th>
+                                        <th>Status</th>
+                                        <th>Handled By</th>
+                                        <th>Date</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="manage-complaints-table">
+                                    <tr><td colspan="10" class="text-center py-4 text-muted">Loading complaints...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 5. USERS & SETTINGS VIEW (ADMIN ONLY) -->
+                <section id="view-settings" class="view-panel" style="display: none;">
+                    <!-- Office Wi-Fi / LAN Network Access Card -->
+                    <div class="panel-card" style="margin-bottom: 24px; border-left: 4px solid #2563eb;">
+                        <div class="panel-header" style="flex-wrap: wrap; gap: 12px;">
+                            <div>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <h3>🏢 Office Wi-Fi / LAN Access</h3>
+                                    <span class="badge badge-status-resolved">✓ LAN Active</span>
+                                    <span class="badge" style="background: #e0e7ff; color: #3730a3; font-weight: 600;">Private Network</span>
+                                </div>
+                                <p class="text-muted" style="margin-top: 4px;">Other laptops and team members connected to the same office Wi-Fi can access this system directly at the address below.</p>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn btn-primary btn-sm" onclick="copyLanUrl()">📋 Copy LAN URL</button>
+                            </div>
+                        </div>
+
+                        <!-- LAN Details Grid -->
+                        <div class="system-diagnostic-grid" style="margin: 16px 24px 20px 24px;">
+                            <div class="diag-item" style="background: #eff6ff; border: 1px solid #bfdbfe;">
+                                <strong style="color: #1e40af; font-size: 0.82rem; text-transform: uppercase;">Direct Office LAN URL</strong>
+                                <div style="margin-top: 6px;">
+                                    <code id="settings-lan-url-display" style="font-size: 1.05rem; font-weight: 700; color: #1e3a8a; background: #ffffff; padding: 4px 10px; border-radius: 4px; border: 1px solid #93c5fd; display: inline-block;">http://192.168.1.55:5050</code>
+                                </div>
+                            </div>
+                            <div class="diag-item">
+                                <strong>Server Binding &amp; WSGI Engine</strong>
+                                <span>Waitress WSGI &bull; <code>0.0.0.0:5050</code> (Production Multi-threaded)</span>
+                            </div>
+                            <div class="diag-item">
+                                <strong>Firewall &amp; Access Scope</strong>
+                                <span style="color: #059669; font-weight: 600;">🔒 Private Wi-Fi Only &bull; Not exposed to Public Internet</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Google Drive & OAuth 2.0 Integration Panel -->
+                    <div class="panel-card" style="margin-bottom: 24px;">
+                        <div class="panel-header" style="flex-wrap: wrap; gap: 12px;">
+                            <div>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <h3>Google Drive &amp; Storage Quota</h3>
+                                    <span id="drive-auth-mode-badge" class="badge badge-status-under-review">Checking Auth...</span>
+                                    <span id="drive-binary-badge" class="badge badge-prio-urgent">Uploads Blocked</span>
+                                </div>
+                                <p class="text-muted" style="margin-top: 4px;">Target Folder: <code>19OyFQPQAOPexKT8IqAkHN2Z8Z3U_n4Aq</code> ("My work"). Personal Drive storage requires human OAuth quota for direct file uploads.</p>
+                            </div>
+                            <div class="drive-header-actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                <button class="btn btn-secondary btn-sm" onclick="openConfigureOAuthModal()">⚙️ Configure OAuth Client</button>
+                                <button class="btn btn-primary btn-sm" id="btn-drive-authorize" onclick="startGoogleOAuth()">🔑 Authorize with Google</button>
+                                <button class="btn btn-warning btn-sm" id="btn-drive-test-upload" onclick="testDriveConnection()">🧪 Test Live Upload</button>
+                                <button class="btn btn-outline-danger btn-sm" id="btn-drive-disconnect" style="display: none;" onclick="disconnectGoogleDrive()">Disconnect OAuth</button>
+                            </div>
+                        </div>
+
+                        <!-- Status Alert Banner -->
+                        <div id="drive-status-alert" style="margin: 16px 24px 0 24px; padding: 12px 16px; border-radius: var(--radius-sm); font-size: 0.88rem; background: #fffbe6; border: 1px solid #ffe58f; color: #d46b08;">
+                            Loading Google Drive connection details...
+                        </div>
+
+                        <!-- Drive Details Grid -->
+                        <div class="system-diagnostic-grid" id="drive-diagnostic-details" style="margin: 16px 24px 20px 24px;">
+                            <div class="diag-item">
+                                <strong>Active Account</strong>
+                                <span id="drive-diag-account">-</span>
+                            </div>
+                            <div class="diag-item">
+                                <strong>Auth Mechanism</strong>
+                                <span id="drive-diag-mode">-</span>
+                            </div>
+                            <div class="diag-item">
+                                <strong>Personal Storage Quota</strong>
+                                <div id="drive-diag-quota-box">
+                                    <span id="drive-diag-quota-text">-</span>
+                                    <div class="quota-progress-container" style="display: none; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; margin-top: 4px;">
+                                        <div id="drive-diag-quota-bar" style="height: 100%; width: 0%; background: #3b82f6;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="diag-item">
+                                <strong>Binary Upload Capability</strong>
+                                <span id="drive-diag-upload-status">-</span>
+                            </div>
+                            <div class="diag-item">
+                                <strong>Target Drive Folder</strong>
+                                <span id="drive-diag-folder">-</span>
+                            </div>
+                            <div class="diag-item">
+                                <strong>Last Verified Live Probe</strong>
+                                <span id="drive-diag-last-verified">-</span>
+                            </div>
+                        </div>
+
+                        <!-- Redirect URI helper for setup -->
+                        <div style="margin: 0 24px 20px 24px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 18px;">
+                            <div style="font-size: 0.85rem; font-weight: 600; color: #1e3a8a; margin-bottom: 8px;">
+                                🌐 Authorised OAuth 2.0 Redirect URIs (Required in Google Cloud Console):
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #ffffff; padding: 6px 10px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                                    <div style="font-size: 0.82rem; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                        <strong>Localhost (Port 5050):</strong>
+                                        <code id="drive-redirect-uri-localhost" style="margin-left: 6px;">http://localhost:5050/api/drive/oauth2callback</code>
+                                    </div>
+                                    <button class="btn btn-secondary btn-sm" onclick="copyRedirectUri('drive-redirect-uri-localhost')">📋 Copy</button>
+                                </div>
+                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #ffffff; padding: 6px 10px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                                    <div style="font-size: 0.82rem; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                        <strong>Current Active Origin:</strong>
+                                        <code id="drive-redirect-uri-display" style="margin-left: 6px;">Loading...</code>
+                                    </div>
+                                    <button class="btn btn-secondary btn-sm" onclick="copyRedirectUri('drive-redirect-uri-display')">📋 Copy</button>
+                                </div>
+                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #ffffff; padding: 6px 10px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                                    <div style="font-size: 0.82rem; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                        <strong>Office LAN Wi-Fi URI:</strong>
+                                        <code id="drive-redirect-uri-lan" style="margin-left: 6px;">http://192.168.1.55:5050/api/drive/oauth2callback</code>
+                                    </div>
+                                    <button class="btn btn-secondary btn-sm" onclick="copyRedirectUri('drive-redirect-uri-lan')">📋 Copy</button>
+                                </div>
+                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #ffffff; padding: 6px 10px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                                    <div style="font-size: 0.82rem; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                        <strong>Production Vercel URI:</strong>
+                                        <code id="drive-redirect-uri-vercel" style="margin-left: 6px;">https://&lt;your-deployment&gt;.vercel.app/api/drive/oauth2callback</code>
+                                    </div>
+                                    <button class="btn btn-secondary btn-sm" onclick="copyRedirectUri('drive-redirect-uri-vercel')">📋 Copy</button>
+                                </div>
+                            </div>
+                            <small class="text-muted" style="display: block; margin-top: 8px; font-size: 0.78rem;">
+                                🔒 All secrets and refresh tokens are encrypted at rest using your Vercel encryption key (<code>CONFIG_ENCRYPTION_KEY</code>) before saving to Google Sheets.
+                            </small>
+                        </div>
+                    </div>
+
+                    <!-- Google Sheets Database Status Card -->
+                    <div class="panel-card" style="margin-bottom: 24px;">
+                        <div class="panel-header">
+                            <div>
+                                <h3>Google Sheets Database (Persistent Engine)</h3>
+                                <p class="text-muted" style="margin-top: 2px;">Google Sheets is the sole database engine. No SQL database or local storage.</p>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" onclick="checkSystemStatus(true)">Refresh Database Status</button>
+                        </div>
+                        <div class="system-diagnostic-grid" id="system-diagnostic-details">
+                            <p class="text-muted">Loading Google Sheets connection details...</p>
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <!-- User Management -->
+                        <div class="panel-card">
+                            <div class="panel-header">
+                                <h3>Users & Staff</h3>
+                                <button class="btn btn-primary btn-sm" onclick="openCreateUserModal()">+ Add User</button>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>User ID</th>
+                                            <th>Name</th>
+                                            <th>Email</th>
+                                            <th>Role</th>
+                                            <th>Department</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="settings-users-table">
+                                        <tr><td colspan="5" class="text-center py-4 text-muted">Loading users...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Department Management -->
+                        <div class="panel-card">
+                            <div class="panel-header">
+                                <h3>Departments</h3>
+                                <button class="btn btn-primary btn-sm" onclick="openCreateDeptModal()">+ Add Department</button>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Department Name</th>
+                                            <th>Description</th>
+                                            <th>Lead Email</th>
+                                            <th>Status</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="settings-depts-table">
+                                        <tr><td colspan="6" class="text-center py-4 text-muted">Loading departments...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 5. REPORTS & ANALYTICS VIEW -->
+                <section id="view-reports" class="view-panel" style="display: none;">
+                    <!-- Preset Header Bar -->
+                    <div class="panel-card" style="margin-bottom: 20px;">
+                        <div class="panel-header" style="flex-wrap: wrap; gap: 12px; align-items: center;">
+                            <div>
+                                <h3 style="margin-bottom: 2px;">Reports &amp; Analytics Hub</h3>
+                                <p class="text-muted" style="font-size: 0.85rem; margin: 0;">Dynamic multi-field queries, visual aggregations, and multi-format exports directly from Google Sheets.</p>
+                            </div>
+                            <div class="reports-header-actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="toggleReportFilters()">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                                    <span id="btn-toggle-filters-text">Hide Filter Builder</span>
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="resetReportFilters()">Reset Filters</button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="saveReportConfiguration()">Save View Config</button>
+                            </div>
+                        </div>
+
+                        <!-- Ready-Made Report Presets -->
+                        <div class="report-presets-bar">
+                            <span class="preset-label">Ready-Made Reports:</span>
+                            <div class="preset-buttons" id="report-preset-buttons">
+                                <button type="button" class="preset-btn active" data-preset="all" onclick="applyReportPreset('all')">All Complaints</button>
+                                <button type="button" class="preset-btn" data-preset="department" onclick="applyReportPreset('department')">Department-wise</button>
+                                <button type="button" class="preset-btn" data-preset="vendor" onclick="applyReportPreset('vendor')">Vendor-wise</button>
+                                <button type="button" class="preset-btn" data-preset="employee" onclick="applyReportPreset('employee')">Employee Performance</button>
+                                <button type="button" class="preset-btn" data-preset="monthly" onclick="applyReportPreset('monthly')">Monthly Trends</button>
+                                <button type="button" class="preset-btn" data-preset="status" onclick="applyReportPreset('status')">Status Pipeline</button>
+                                <button type="button" class="preset-btn" data-preset="priority" onclick="applyReportPreset('priority')">Priority &amp; Category</button>
+                                <button type="button" class="preset-btn" data-preset="customer" onclick="applyReportPreset('customer')">Customer History</button>
+                                <button type="button" class="preset-btn" data-preset="gr" onclick="applyReportPreset('gr')">GR &amp; Financials</button>
+                                <button type="button" class="preset-btn" data-preset="overdue" onclick="applyReportPreset('overdue')">Overdue &amp; Resolution</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Filter Builder Panel -->
+                    <div class="panel-card filter-builder-panel" id="report-filter-panel" style="margin-bottom: 20px;">
+                        <div class="filter-builder-title" style="margin-bottom: 14px;">
+                            <h4 style="margin: 0; font-size: 1rem; color: #1e3a8a;">Dynamic Report Builder</h4>
+                            <span class="text-muted" style="font-size: 0.8rem;">Apply multiple simultaneous criteria across all 21 complaint fields</span>
+                        </div>
+
+                        <form id="report-filter-form" onsubmit="handleApplyReportFilters(event)">
+                            <!-- Row 1: Date Range Presets & Custom Dates -->
+                            <div class="form-row-4">
+                                <div class="form-group">
+                                    <label>Date Range Preset</label>
+                                    <select id="report-filter-date-preset" onchange="handleReportDatePresetChange()">
+                                        <option value="all" selected>All Time</option>
+                                        <option value="today">Today</option>
+                                        <option value="yesterday">Yesterday</option>
+                                        <option value="this_week">This Week</option>
+                                        <option value="this_month">This Month</option>
+                                        <option value="last_month">Last Month</option>
+                                        <option value="this_quarter">This Quarter</option>
+                                        <option value="this_year">This Year</option>
+                                        <option value="custom">Custom Date Range</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Start Date</label>
+                                    <input type="date" id="report-filter-start-date">
+                                </div>
+                                <div class="form-group">
+                                    <label>End Date</label>
+                                    <input type="date" id="report-filter-end-date">
+                                </div>
+                                <div class="form-group">
+                                    <label>Quick Search</label>
+                                    <input type="text" id="report-filter-search" placeholder="ID, Customer, Invoice, Subject...">
+                                </div>
+                            </div>
+
+                            <!-- Row 2: Multi-Department, Multi-Vendor, Classification -->
+                            <div class="form-row-4">
+                                <div class="form-group">
+                                    <label>Department(s)</label>
+                                    <div class="multi-select-container" id="report-dept-multi-select">
+                                        <button type="button" class="multi-select-toggle" id="report-dept-toggle" onclick="toggleMultiSelect('report-dept')">
+                                            <span class="multi-select-label" id="report-dept-label">All Departments</span>
+                                            <span class="multi-select-arrow">&#9662;</span>
+                                        </button>
+                                        <div class="multi-select-dropdown" id="report-dept-dropdown" style="display: none;">
+                                            <div class="multi-select-header">
+                                                <input type="text" class="multi-select-search" id="report-dept-search" placeholder="Search..." oninput="filterMultiSelectOptions('report-dept')">
+                                                <div class="multi-select-actions">
+                                                    <button type="button" class="btn-link-action" onclick="selectAllDepartments('report-dept')">All</button>
+                                                    <span class="action-sep">|</span>
+                                                    <button type="button" class="btn-link-action" onclick="clearAllDepartments('report-dept')">Clear</button>
+                                                </div>
+                                            </div>
+                                            <div class="multi-select-options" id="report-dept-options">
+                                                <div class="text-muted p-2">Loading...</div>
+                                            </div>
+                                        </div>
+                                        <input type="hidden" id="report-filter-departments">
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Vendor(s)</label>
+                                    <div class="multi-select-container" id="report-vendor-multi-select">
+                                        <button type="button" class="multi-select-toggle" id="report-vendor-toggle" onclick="toggleMultiSelect('report-vendor')">
+                                            <span class="multi-select-label" id="report-vendor-label">All Vendors</span>
+                                            <span class="multi-select-arrow">&#9662;</span>
+                                        </button>
+                                        <div class="multi-select-dropdown" id="report-vendor-dropdown" style="display: none;">
+                                            <div class="multi-select-header">
+                                                <input type="text" class="multi-select-search" id="report-vendor-search" placeholder="Search..." oninput="filterVendorOptions()">
+                                                <div class="multi-select-actions">
+                                                    <button type="button" class="btn-link-action" onclick="selectAllVendors()">All</button>
+                                                    <span class="action-sep">|</span>
+                                                    <button type="button" class="btn-link-action" onclick="clearAllVendors()">Clear</button>
+                                                </div>
+                                            </div>
+                                            <div class="multi-select-options" id="report-vendor-options">
+                                                <div class="text-muted p-2">Loading...</div>
+                                            </div>
+                                        </div>
+                                        <input type="hidden" id="report-filter-vendors">
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Status</label>
+                                    <select id="report-filter-status">
+                                        <option value="" selected>All Statuses</option>
+                                        <option value="Submitted">Submitted</option>
+                                        <option value="Under Review">Under Review</option>
+                                        <option value="In Progress">In Progress</option>
+                                        <option value="Resolved">Resolved</option>
+                                        <option value="Rejected">Rejected</option>
+                                        <option value="Closed">Closed</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Priority</label>
+                                    <select id="report-filter-priority">
+                                        <option value="" selected>All Priorities</option>
+                                        <option value="Urgent">Urgent</option>
+                                        <option value="High">High</option>
+                                        <option value="Medium">Medium</option>
+                                        <option value="Low">Low</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Row 3: Employee, Handled By, Customer, Invoice -->
+                            <div class="form-row-4">
+                                <div class="form-group">
+                                    <label>Handled By</label>
+                                    <input type="text" id="report-filter-handled-by" placeholder="Assignee name...">
+                                </div>
+                                <div class="form-group">
+                                    <label>Employee Name</label>
+                                    <input type="text" id="report-filter-employee" placeholder="Employee...">
+                                </div>
+                                <div class="form-group">
+                                    <label>Salesperson Name</label>
+                                    <input type="text" id="report-filter-salesperson" placeholder="Salesperson...">
+                                </div>
+                                <div class="form-group">
+                                    <label>Customer Name</label>
+                                    <input type="text" id="report-filter-customer" placeholder="Customer...">
+                                </div>
+                            </div>
+
+                            <!-- Row 4: Complain Type, Category, GR Amount, Overdue -->
+                            <div class="form-row-4">
+                                <div class="form-group">
+                                    <label>Complain Type</label>
+                                    <input type="text" id="report-filter-type" placeholder="Type / Subject...">
+                                </div>
+                                <div class="form-group">
+                                    <label>Category</label>
+                                    <input type="text" id="report-filter-category" placeholder="Category...">
+                                </div>
+                                <div class="form-group">
+                                    <label>GR Amount Range (₹)</label>
+                                    <div style="display: flex; gap: 6px; align-items: center;">
+                                        <input type="number" step="0.01" min="0" id="report-filter-gr-min" placeholder="Min">
+                                        <span class="text-muted">-</span>
+                                        <input type="number" step="0.01" min="0" id="report-filter-gr-max" placeholder="Max">
+                                    </div>
+                                </div>
+                                <div class="form-group" style="display: flex; flex-direction: column; justify-content: flex-end;">
+                                    <label class="checkbox-inline" style="cursor: pointer; margin-bottom: 10px;">
+                                        <input type="checkbox" id="report-filter-overdue">
+                                        <span style="font-weight: 600; color: #dc2626; margin-left: 6px;">Overdue Only (&gt;7d / past GR date)</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="filter-actions-row" style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); flex-wrap: wrap; gap: 10px;">
+                                <div class="filter-actions-left" style="display: flex; gap: 8px;">
+                                    <button type="submit" class="btn btn-primary" id="btn-apply-report-filters">
+                                        <span>Apply Filters</span>
+                                    </button>
+                                    <button type="button" class="btn btn-secondary" onclick="resetReportFilters()">Clear Filters</button>
+                                </div>
+                                <div class="filter-actions-right">
+                                    <span class="active-filter-indicator" id="report-active-filter-badge" style="font-size: 0.85rem; color: var(--text-muted);">All Records (No Filters Active)</span>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- Dynamic KPI Summary Cards -->
+                    <div class="stats-grid" id="report-kpi-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Total Filtered Complaints</div>
+                            <div class="stat-val" id="report-kpi-total">0</div>
+                            <div class="stat-sub">Unique records</div>
+                        </div>
+                        <div class="stat-card stat-resolved">
+                            <div class="stat-label">Resolved / Closed</div>
+                            <div class="stat-val" id="report-kpi-resolved">0</div>
+                            <div class="stat-sub" id="report-kpi-res-rate">0% resolution rate</div>
+                        </div>
+                        <div class="stat-card stat-pending">
+                            <div class="stat-label">Pending / In Progress</div>
+                            <div class="stat-val" id="report-kpi-pending">0</div>
+                            <div class="stat-sub">Active workflow</div>
+                        </div>
+                        <div class="stat-card stat-progress">
+                            <div class="stat-label">Avg Resolution Time</div>
+                            <div class="stat-val" id="report-kpi-avg-time">0 <span style="font-size: 1rem; font-weight: normal;">days</span></div>
+                            <div class="stat-sub">From lodged to closed</div>
+                        </div>
+                        <div class="stat-card" style="border-left: 4px solid #ef4444;">
+                            <div class="stat-label">Overdue Complaints</div>
+                            <div class="stat-val" id="report-kpi-overdue" style="color: #ef4444;">0</div>
+                            <div class="stat-sub">Requires urgent escalation</div>
+                        </div>
+                        <div class="stat-card" style="border-left: 4px solid #059669;">
+                            <div class="stat-label">Total GR Amount</div>
+                            <div class="stat-val" id="report-kpi-gr-total" style="color: #059669;">₹0.00</div>
+                            <div class="stat-sub" id="report-kpi-gr-pending">Pending: ₹0.00</div>
+                        </div>
+                    </div>
+
+                    <!-- Interactive Analytics Charts Grid -->
+                    <div class="charts-grid" style="margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 20px;">
+                        <!-- Chart 1: Department Breakdown -->
+                        <div class="panel-card chart-card">
+                            <div class="panel-header">
+                                <div>
+                                    <h4 style="margin: 0; font-size: 0.95rem;">Department Performance &amp; Volume</h4>
+                                    <p class="text-muted" style="font-size: 0.78rem; margin: 0;">Multi-department complaint attribution</p>
+                                </div>
+                            </div>
+                            <div class="chart-canvas-container" id="chart-department-container" style="min-height: 240px; position: relative;">
+                                <div class="text-muted p-4 text-center">Loading chart data...</div>
+                            </div>
+                        </div>
+
+                        <!-- Chart 2: Monthly Trends -->
+                        <div class="panel-card chart-card">
+                            <div class="panel-header">
+                                <div>
+                                    <h4 style="margin: 0; font-size: 0.95rem;">Monthly Complaint Trends</h4>
+                                    <p class="text-muted" style="font-size: 0.78rem; margin: 0;">Lodged vs. Resolved volume over time</p>
+                                </div>
+                            </div>
+                            <div class="chart-canvas-container" id="chart-trend-container" style="min-height: 240px; position: relative;">
+                                <div class="text-muted p-4 text-center">Loading chart data...</div>
+                            </div>
+                        </div>
+
+                        <!-- Chart 3: Status & Priority Breakdown -->
+                        <div class="panel-card chart-card">
+                            <div class="panel-header">
+                                <div>
+                                    <h4 style="margin: 0; font-size: 0.95rem;">Status &amp; Priority Breakdown</h4>
+                                    <p class="text-muted" style="font-size: 0.78rem; margin: 0;">Severity and pipeline stage distribution</p>
+                                </div>
+                            </div>
+                            <div class="chart-canvas-container" id="chart-status-container" style="min-height: 240px; position: relative;">
+                                <div class="text-muted p-4 text-center">Loading chart data...</div>
+                            </div>
+                        </div>
+
+                        <!-- Chart 4: Top Vendors & Financial Exposure -->
+                        <div class="panel-card chart-card">
+                            <div class="panel-header">
+                                <div>
+                                    <h4 style="margin: 0; font-size: 0.95rem;">Top Vendors by Complaint Volume &amp; GR</h4>
+                                    <p class="text-muted" style="font-size: 0.78rem; margin: 0;">Vendor defect tracking and returns</p>
+                                </div>
+                            </div>
+                            <div class="chart-canvas-container" id="chart-vendor-container" style="min-height: 240px; position: relative;">
+                                <div class="text-muted p-4 text-center">Loading chart data...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Report Table & Export Control Section -->
+                    <div class="panel-card" style="margin-top: 24px;">
+                        <div class="panel-header" style="flex-wrap: wrap; gap: 12px; align-items: center;">
+                            <!-- Export Action Buttons -->
+                            <div class="export-actions-group" style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                                <button type="button" class="btn btn-success btn-sm" onclick="exportReport('excel')" title="Export filtered records to Microsoft Excel (.xlsx)">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+                                    <span>Export Excel (.xlsx)</span>
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="exportReport('csv')" title="Export standard CSV file with UTF-8 BOM">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                    <span>Export CSV</span>
+                                </button>
+                                <button type="button" class="btn btn-danger btn-sm" onclick="exportReport('pdf')" title="Export publication-ready landscape PDF report">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                                    <span>Export PDF</span>
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="openPrintableReport()" title="Open formatted report in print view">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                                    <span>Print Report</span>
+                                </button>
+
+                                <!-- Column Customizer Button -->
+                                <div class="column-customizer-popover-container" style="position: relative; display: inline-block;">
+                                    <button type="button" class="btn btn-outline-primary btn-sm" id="btn-toggle-column-picker" onclick="toggleColumnCustomizer()">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                                        <span>Columns (<span id="report-column-count-badge">8</span>)</span>
+                                    </button>
+                                    <div class="column-customizer-dropdown" id="report-column-picker" style="display: none;">
+                                        <div class="column-customizer-header">
+                                            <strong>Select Visible Columns</strong>
+                                            <div class="column-customizer-header-actions">
+                                                <button type="button" class="btn-link-action" onclick="selectAllReportColumns()">All</button>
+                                                <span class="action-sep">|</span>
+                                                <button type="button" class="btn-link-action" onclick="resetDefaultReportColumns()">Default</button>
+                                            </div>
+                                        </div>
+                                        <div class="column-customizer-list" id="report-column-checkboxes-container">
+                                            <!-- Dynamically populated from ALL_REPORT_COLUMNS -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Right Controls: Grouping & Pagination sizing -->
+                            <div class="table-view-controls" style="display: flex; gap: 12px; align-items: center; margin-left: auto;">
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <label for="report-group-by" style="font-size: 0.82rem; margin: 0; font-weight: 500; color: var(--text-muted);">Group By:</label>
+                                    <select id="report-group-by" class="filter-select" style="padding: 4px 8px; font-size: 0.82rem;" onchange="handleReportGroupByChange()">
+                                        <option value="none" selected>None</option>
+                                        <option value="Department Name">Department</option>
+                                        <option value="Vendor Name">Vendor</option>
+                                        <option value="Status">Status</option>
+                                        <option value="Priority">Priority</option>
+                                        <option value="Handled By">Handled By</option>
+                                        <option value="Complain Date">Month</option>
+                                    </select>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <label for="report-page-size" style="font-size: 0.82rem; margin: 0; font-weight: 500; color: var(--text-muted);">Rows:</label>
+                                    <select id="report-page-size" class="filter-select" style="padding: 4px 8px; font-size: 0.82rem;" onchange="handleReportPageSizeChange()">
+                                        <option value="10">10</option>
+                                        <option value="25" selected>25</option>
+                                        <option value="50">50</option>
+                                        <option value="100">100</option>
+                                        <option value="all">All</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Data Table Container -->
+                        <div class="table-responsive" style="margin-top: 12px; max-height: 600px; overflow-y: auto;">
+                            <table class="data-table" id="report-data-table">
+                                <thead id="report-table-head">
+                                    <!-- Dynamic column headers with sorting triggers -->
+                                </thead>
+                                <tbody id="report-table-body">
+                                    <tr><td colspan="10" class="text-center py-4 text-muted">Loading report records...</td></tr>
+                                </tbody>
+                                <tfoot id="report-table-foot" style="background: #f8fafc; font-weight: 600; border-top: 2px solid var(--border);">
+                                    <!-- Dynamic totals footer row -->
+                                </tfoot>
+                            </table>
+                        </div>
+
+                        <!-- Table Pagination Bar -->
+                        <div class="table-pagination-bar" id="report-pagination-bar" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 4px 4px; margin-top: 8px;">
+                            <div class="pagination-info text-muted" id="report-pagination-info" style="font-size: 0.85rem;">
+                                Showing 0 to 0 of 0 complaints
+                            </div>
+                            <div class="pagination-buttons" id="report-pagination-controls" style="display: flex; gap: 4px;">
+                                <!-- Dynamically generated pagination pills -->
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+            </main>
+        </div>
+    </div>
+
+    <!-- COMPLAINT DETAIL & TIMELINE MODAL (VIEW) -->
+    <div id="complaint-detail-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-header">
+                <div>
+                    <h3 id="modal-comp-id">Complaint Details</h3>
+                    <div id="modal-comp-badges" class="modal-badges"></div>
+                </div>
+                <div class="modal-action-bar">
+                    <button type="button" class="btn btn-warning btn-sm" id="modal-btn-edit" onclick="openEditModalFromDetail()">Edit</button>
+                    <button type="button" class="btn btn-outline-danger btn-sm admin-only" id="modal-btn-delete" onclick="openDeleteModalFromDetail()">Delete</button>
+                    <button class="btn-close" onclick="closeComplaintModal()">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <!-- Group 1: Customer & Sales Details -->
+                <div class="detail-section-title">1. Customer & Sales Details</div>
+                <div class="detail-card-grid">
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Customer Name</span>
+                        <span class="detail-field-val" id="modal-customer-name">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Customer Mobile</span>
+                        <span class="detail-field-val" id="modal-customer-mobile">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Invoice No.</span>
+                        <span class="detail-field-val" id="modal-invoice-no">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Complain Date</span>
+                        <span class="detail-field-val" id="modal-complain-date">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Employee Name</span>
+                        <span class="detail-field-val" id="modal-employee-name">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Salesperson Name</span>
+                        <span class="detail-field-val" id="modal-salesperson-name">-</span>
+                    </div>
+                    <div class="detail-field-item" style="grid-column: 1 / -1;">
+                        <span class="detail-field-label">Registered Complainant Email</span>
+                        <span class="detail-field-val" id="modal-email">-</span>
+                    </div>
+                </div>
+
+                <!-- Group 2: Department & Categorization -->
+                <div class="detail-section-title">2. Department & Categorization</div>
+                <div class="detail-card-grid">
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Department</span>
+                        <span class="detail-field-val" id="modal-dept">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Complain Type</span>
+                        <span class="detail-field-val" id="modal-complain-type">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Category</span>
+                        <span class="detail-field-val" id="modal-category">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Vendor Name</span>
+                        <span class="detail-field-val" id="modal-vendor-name">-</span>
+                    </div>
+                </div>
+
+                <!-- Group 3: Issue Description & Remarks -->
+                <div class="detail-section-title">3. Issue Description & Remarks</div>
+                <div class="complaint-subject-box">
+                    <p id="modal-description" class="complaint-description-text">-</p>
+                </div>
+                <div id="modal-remarks-box" style="margin-bottom: 18px; display: none;">
+                    <strong>Remarks:</strong>
+                    <div id="modal-remarks" style="background: #f8fafc; padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border); margin-top: 4px; font-size: 0.88rem;">-</div>
+                </div>
+
+                <!-- Group 4: Resolution & Goods Return (GR) Details -->
+                <div class="detail-section-title">4. Resolution & Goods Return (GR)</div>
+                <div class="detail-card-grid">
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Current Status</span>
+                        <span class="detail-field-val" id="modal-status-text">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Handled By</span>
+                        <span class="detail-field-val" id="modal-assigned">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Closing Date</span>
+                        <span class="detail-field-val" id="modal-closing-date">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Total Time Taken</span>
+                        <span class="detail-field-val" id="modal-time-taken">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">GR Amount</span>
+                        <span class="detail-field-val" id="modal-gr-amount">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">GR Expected Date</span>
+                        <span class="detail-field-val" id="modal-gr-date">-</span>
+                    </div>
+                    <div class="detail-field-item" style="grid-column: 1 / -1;">
+                        <span class="detail-field-label">Solution Given</span>
+                        <span class="detail-field-val" id="modal-solution-given">-</span>
+                    </div>
+                    <div class="detail-field-item" style="grid-column: 1 / -1;">
+                        <span class="detail-field-label">Internal Comments</span>
+                        <span class="detail-field-val" id="modal-record-comments">-</span>
+                    </div>
+                </div>
+
+                <!-- Group 5: Attachments & Timestamps -->
+                <div class="detail-section-title">5. Attachment & Record Info</div>
+                <div class="detail-card-grid">
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Created At</span>
+                        <span class="detail-field-val" id="modal-timestamp">-</span>
+                    </div>
+                    <div class="detail-field-item">
+                        <span class="detail-field-label">Last Updated</span>
+                        <span class="detail-field-val" id="modal-updated">-</span>
+                    </div>
+                    <div class="detail-field-item" style="grid-column: 1 / -1;">
+                        <span class="detail-field-label">Attachment Link</span>
+                        <div id="modal-attachment-box">
+                            <a id="modal-attachment-link" href="#" target="_blank" class="attachment-link">Open Attachment &rarr;</a>
+                            <span id="modal-attachment-none" class="text-muted">None attached</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Staff Action Box (Staff/Admin Only) -->
+                <div id="modal-staff-controls" class="staff-action-box" style="display: none;">
+                    <h4>Quick Staff Actions</h4>
+                    <div class="action-grid">
+                        <div class="form-group">
+                            <label>Update Status</label>
+                            <div class="input-action-row">
+                                <select id="modal-status-select">
+                                    <option value="Submitted">Submitted</option>
+                                    <option value="Under Review">Under Review</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Resolved">Resolved</option>
+                                    <option value="Rejected">Rejected</option>
+                                    <option value="Closed">Closed</option>
+                                </select>
+                                <button class="btn btn-primary btn-sm" onclick="submitStatusUpdate()">Update</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Assign Staff</label>
+                            <div class="input-action-row">
+                                <select id="modal-assign-select">
+                                    <option value="">Select Assignee...</option>
+                                </select>
+                                <button class="btn btn-secondary btn-sm" onclick="submitAssignment()">Assign</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-top: 8px;">
+                        <label>Status Remarks / Resolution Summary</label>
+                        <input type="text" id="modal-status-remarks" placeholder="Optional notes for status change...">
+                    </div>
+                </div>
+
+                <!-- Status Timeline History -->
+                <div class="timeline-section">
+                    <h4>Status History (Audit Trail)</h4>
+                    <div id="modal-timeline" class="timeline">
+                        <div class="timeline-empty text-muted">No history recorded.</div>
+                    </div>
+                </div>
+
+                <!-- Comments & Discussion Thread -->
+                <div class="comments-section">
+                    <h4>Activity & Comments</h4>
+                    <div id="modal-comments-list" class="comments-list">
+                        <div class="text-muted">No comments yet.</div>
+                    </div>
+                    
+                    <form id="modal-comment-form" class="comment-form" onsubmit="submitComment(event)">
+                        <div class="form-group">
+                            <textarea id="modal-comment-msg" rows="2" placeholder="Write a message or update..." required></textarea>
+                        </div>
+                        <div class="comment-form-actions">
+                            <select id="modal-comment-type" class="staff-only" style="display: none; width: auto;">
+                                <option value="Public Update">Public Update (Visible to Complainant)</option>
+                                <option value="Internal Note">Internal Note (Staff Only)</option>
+                            </select>
+                            <button type="submit" class="btn btn-primary btn-sm">Post Comment</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- EDIT COMPLAINT MODAL -->
+    <div id="edit-complaint-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-header">
+                <div>
+                    <h3 id="edit-modal-title">Edit Complaint</h3>
+                    <p class="text-muted" style="font-size: 0.85rem; margin-top: 2px;">Modify any of the 21 complaint fields. Updates are persisted directly to Google Sheets.</p>
+                </div>
+                <button class="btn-close" onclick="closeEditComplaintModal()">&times;</button>
+            </div>
+            <form id="edit-complaint-form" onsubmit="submitEditComplaint(event)">
+                <div class="modal-body">
+                    <!-- Section 1: Customer Details -->
+                    <div class="form-section-title">
+                        <span>1. Customer & Sales Details</span>
+                    </div>
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label>Customer Name <span class="required">*</span></label>
+                            <input type="text" id="edit-customer-name" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Customer Mobile No.</label>
+                            <input type="tel" id="edit-customer-mobile">
+                        </div>
+                        <div class="form-group">
+                            <label>Invoice No.</label>
+                            <input type="text" id="edit-invoice-no">
+                        </div>
+                    </div>
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label>Complain Date <span class="required">*</span></label>
+                            <input type="date" id="edit-complain-date" required onchange="recalculateEditTimeTaken()">
+                        </div>
+                        <div class="form-group">
+                            <label>Employee Name</label>
+                            <input type="text" id="edit-employee-name">
+                        </div>
+                        <div class="form-group">
+                            <label>Salesperson Name</label>
+                            <input type="text" id="edit-salesperson-name">
+                        </div>
+                    </div>
+
+                    <!-- Section 2: Department & Classification -->
+                    <div class="form-section-title">
+                        <span>2. Department & Classification</span>
+                    </div>
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label>Department Name(s) <span class="required">*</span></label>
+                            <div class="multi-select-container" id="edit-dept-multi-select">
+                                <button type="button" class="multi-select-toggle" id="edit-dept-toggle" onclick="toggleMultiSelect('edit')">
+                                    <span class="multi-select-label" id="edit-dept-label">Select Department(s)...</span>
+                                    <span class="multi-select-arrow">&#9662;</span>
+                                </button>
+                                <div class="multi-select-dropdown" id="edit-dept-dropdown" style="display: none;">
+                                    <div class="multi-select-header">
+                                        <input type="text" class="multi-select-search" id="edit-dept-search" placeholder="Search departments..." oninput="filterMultiSelectOptions('edit')">
+                                        <div class="multi-select-actions">
+                                            <button type="button" class="btn-link-action" onclick="selectAllDepartments('edit')">Select All</button>
+                                            <span class="action-sep">|</span>
+                                            <button type="button" class="btn-link-action" onclick="clearAllDepartments('edit')">Clear All</button>
+                                        </div>
+                                    </div>
+                                    <div class="multi-select-options" id="edit-dept-options">
+                                        <div class="text-muted p-2">Loading departments...</div>
+                                    </div>
+                                </div>
+                                <input type="hidden" id="edit-dept" name="department_name" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Complain Types <span class="required">*</span></label>
+                            <input type="text" id="edit-complain-type" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Priority <span class="required">*</span></label>
+                            <select id="edit-priority" required>
+                                <option value="Low">Low</option>
+                                <option value="Medium">Medium</option>
+                                <option value="High">High</option>
+                                <option value="Urgent">Urgent</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row-2">
+                        <div class="form-group">
+                            <label>Category</label>
+                            <input type="text" id="edit-category">
+                        </div>
+                        <div class="form-group">
+                            <label>Vendor Name</label>
+                            <input type="text" id="edit-vendor-name">
+                        </div>
+                    </div>
+
+                    <!-- Section 3: Complaint Description & Remarks -->
+                    <div class="form-section-title">
+                        <span>3. Complaint Description & Remarks</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Complain Details <span class="required">*</span></label>
+                        <textarea id="edit-description" rows="3" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Remarks</label>
+                        <input type="text" id="edit-remarks">
+                    </div>
+
+                    <!-- Section 4: Resolution & GR Tracking -->
+                    <div class="form-section-title">
+                        <span>4. Resolution & Goods Return (GR) Tracking</span>
+                    </div>
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label>Status</label>
+                            <select id="edit-status">
+                                <option value="Submitted">Submitted</option>
+                                <option value="Under Review">Under Review</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Resolved">Resolved</option>
+                                <option value="Rejected">Rejected</option>
+                                <option value="Closed">Closed</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Handled By</label>
+                            <input type="text" id="edit-handled-by">
+                        </div>
+                        <div class="form-group">
+                            <label>Closing Date</label>
+                            <input type="date" id="edit-closing-date" onchange="recalculateEditTimeTaken()">
+                        </div>
+                    </div>
+                    <div class="form-row-2">
+                        <div class="form-group">
+                            <label>Solution Given</label>
+                            <textarea id="edit-solution-given" rows="2"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>Comments</label>
+                            <textarea id="edit-comments" rows="2"></textarea>
+                        </div>
+                    </div>
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label>Total Time Taken</label>
+                            <input type="text" id="edit-time-taken" placeholder="e.g. 2 days">
+                        </div>
+                        <div class="form-group">
+                            <label>GR Amount (₹)</label>
+                            <input type="number" step="0.01" min="0" id="edit-gr-amount" placeholder="0.00">
+                        </div>
+                        <div class="form-group">
+                            <label>GR Expected Date</label>
+                            <input type="date" id="edit-gr-date">
+                        </div>
+                    </div>
+
+                    <!-- Section 5: Attachment Link -->
+                    <div class="form-section-title">
+                        <span>5. Attachment Link</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Google Drive / Cloud Share Link</label>
+                        <input type="url" id="edit-attachment-link" placeholder="https://drive.google.com/file/d/...">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeEditComplaintModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="edit-submit-btn">Save Changes to Google Sheets</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- DELETE CONFIRMATION MODAL -->
+    <div id="delete-confirm-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3 style="color: #ef4444;">Confirm Permanent Deletion</h3>
+                <button class="btn-close" onclick="closeDeleteConfirmModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 14px; margin-bottom: 16px; color: #991b1b; font-size: 0.9rem;">
+                    <strong>Warning:</strong> You are about to permanently delete this complaint from Google Sheets. This action cannot be reversed.
+                </div>
+                <p><strong>Complaint ID:</strong> <code id="delete-modal-comp-id">-</code></p>
+                <p><strong>Customer:</strong> <span id="delete-modal-customer">-</span></p>
+                <p><strong>Subject / Issue:</strong> <span id="delete-modal-subject">-</span></p>
+                <p style="margin-top: 12px; font-size: 0.85rem; color: var(--text-muted);">
+                    An audit trail record will be preserved in the <strong>Status History</strong> sheet marking the complaint as DELETED by your administrative account.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeDeleteConfirmModal()">Cancel</button>
+                <button type="button" class="btn btn-danger" id="delete-confirm-btn" onclick="executeDeleteComplaint()">Confirm & Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CREATE USER MODAL -->
+    <div id="create-user-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>Create New User</h3>
+                <button class="btn-close" onclick="closeCreateUserModal()">&times;</button>
+            </div>
+            <form onsubmit="submitCreateUser(event)">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Full Name <span class="required">*</span></label>
+                        <input type="text" id="modal-user-name" required placeholder="Full Name">
+                    </div>
+                    <div class="form-group">
+                        <label>Email Address <span class="required">*</span></label>
+                        <input type="email" id="modal-user-email" required placeholder="user@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Role <span class="required">*</span></label>
+                        <select id="modal-user-role" required>
+                            <option value="User">User / Complainant</option>
+                            <option value="Support Staff" selected>Support Staff</option>
+                            <option value="Admin">Admin</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Department</label>
+                        <select id="modal-user-dept"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Password <span class="required">*</span></label>
+                        <input type="password" id="modal-user-password" required minlength="6" placeholder="Minimum 6 characters">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeCreateUserModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create User</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- CREATE DEPARTMENT MODAL -->
+    <div id="create-dept-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>Create Department</h3>
+                <button class="btn-close" onclick="closeCreateDeptModal()">&times;</button>
+            </div>
+            <form onsubmit="submitCreateDept(event)">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Department Name <span class="required">*</span></label>
+                        <input type="text" id="modal-dept-name" required placeholder="e.g. Quality Assurance">
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="modal-dept-desc" rows="3" placeholder="Scope of complaints handled..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Lead / Escalation Email</label>
+                        <input type="email" id="modal-dept-lead" placeholder="lead@example.com">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeCreateDeptModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Department</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- EDIT DEPARTMENT MODAL -->
+    <div id="edit-dept-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>Edit Department</h3>
+                <button class="btn-close" onclick="closeEditDeptModal()">&times;</button>
+            </div>
+            <form onsubmit="submitEditDept(event)">
+                <input type="hidden" id="edit-dept-id">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Department ID</label>
+                        <input type="text" id="edit-dept-id-display" disabled style="background: #f1f5f9; cursor: not-allowed;">
+                    </div>
+                    <div class="form-group">
+                        <label>Department Name <span class="required">*</span></label>
+                        <input type="text" id="edit-dept-name" required placeholder="e.g. IT & Technical Support">
+                        <small class="text-muted">Renaming this department automatically updates all linked complaints in Google Sheets.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="edit-dept-desc" rows="3" placeholder="Scope of complaints handled..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Lead / Escalation Email</label>
+                        <input type="email" id="edit-dept-lead" placeholder="lead@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select id="edit-dept-status">
+                            <option value="TRUE">Active</option>
+                            <option value="FALSE">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeEditDeptModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="edit-dept-submit-btn">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- DELETE DEPARTMENT CONFIRMATION MODAL -->
+    <div id="delete-dept-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3 style="color: #ef4444;">Delete Department</h3>
+                <button class="btn-close" onclick="closeDeleteDeptModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="delete-dept-id">
+                <p><strong>Department:</strong> <span id="delete-dept-name-display" style="font-weight: 600;">-</span> (<code id="delete-dept-code-display">-</code>)</p>
+                
+                <div id="delete-dept-usage-loading" class="text-muted" style="padding: 12px 0;">
+                    Checking linked complaints in Google Sheets...
+                </div>
+
+                <!-- Shown when complaints are linked -->
+                <div id="delete-dept-warning-linked" style="display: none;">
+                    <div style="background: #fffbe6; border: 1px solid #ffe58f; padding: 12px 14px; border-radius: 6px; margin: 12px 0; color: #d46b08; font-size: 0.9rem;">
+                        <strong>Reassignment Required:</strong> This department is currently linked to <strong id="delete-dept-linked-count">0</strong> complaint(s). Google Sheets data integrity requires all linked complaints to be reassigned to another active department before this department can be deleted.
+                    </div>
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label>Reassign Linked Complaints To: <span class="required">*</span></label>
+                        <select id="delete-dept-reassign-select">
+                            <option value="">Select Replacement Department...</option>
+                        </select>
+                        <small class="text-muted">All complaints referencing this department will be safely updated in Google Sheets.</small>
+                    </div>
+                </div>
+
+                <!-- Shown when NO complaints are linked -->
+                <div id="delete-dept-clean" style="display: none;">
+                    <div style="background: #f6ffed; border: 1px solid #b7eb8f; padding: 12px 14px; border-radius: 6px; margin: 12px 0; color: #389e0d; font-size: 0.9rem;">
+                        No complaints are currently linked to this department. It can be safely deleted.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeDeleteDeptModal()">Cancel</button>
+                <button type="button" class="btn btn-danger" id="delete-dept-confirm-btn" onclick="executeDeleteDept()">Delete Department</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GOOGLE OAUTH 2.0 CONFIGURATION MODAL (ADMIN ONLY) -->
+    <div id="configure-oauth-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-header">
+                <div>
+                    <h3>Configure Google OAuth 2.0 Web Client</h3>
+                    <p class="text-muted" style="font-size: 0.85rem; margin-top: 4px;">Enables direct binary uploads to Personal Google Drive using your personal Gmail storage quota.</p>
+                </div>
+                <button class="btn-close" onclick="closeConfigureOAuthModal()">&times;</button>
+            </div>
+            <form id="configure-oauth-form" onsubmit="submitConfigureOAuth(event)">
+                <div class="modal-body">
+                    <!-- Step-by-step Setup Guide -->
+                    <div class="oauth-setup-guide" style="background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                        <h4 style="font-size: 0.9rem; margin-bottom: 8px; color: #1e40af;">Google Cloud Console Setup Instructions</h4>
+                        <ol style="font-size: 0.84rem; color: #334155; padding-left: 20px; line-height: 1.7;">
+                            <li>Open the <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="attachment-link">Google Cloud Console Credentials Page</a> (Project: <code>az-data-management</code>).</li>
+                            <li>Click <strong>+ CREATE CREDENTIALS</strong> &rarr; <strong>OAuth client ID</strong>.</li>
+                            <li>Set Application type to <strong>Web application</strong>. Name it e.g. <em>Complaint System Drive OAuth</em>.</li>
+                            <li>Under <strong>Authorized redirect URIs</strong>, click <strong>+ ADD URI</strong> and add both your local and production URIs:
+                                <div style="display: flex; flex-direction: column; gap: 6px; margin: 8px 0;">
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <span style="font-size: 0.78rem; font-weight: 600; width: 85px;">Localhost:</span>
+                                        <input type="text" id="modal-redirect-uri-local" readonly style="font-family: monospace; font-size: 0.8rem; background: #ffffff; padding: 5px 8px; flex: 1; border: 1px solid var(--border); border-radius: var(--radius-sm);" value="http://localhost:5050/api/drive/oauth2callback">
+                                        <button type="button" class="btn btn-secondary btn-sm" onclick="copyRedirectUri('modal-redirect-uri-local')">Copy</button>
+                                    </div>
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <span style="font-size: 0.78rem; font-weight: 600; width: 85px;">127.0.0.1:</span>
+                                        <input type="text" id="modal-redirect-uri-ip" readonly style="font-family: monospace; font-size: 0.8rem; background: #ffffff; padding: 5px 8px; flex: 1; border: 1px solid var(--border); border-radius: var(--radius-sm);" value="http://127.0.0.1:5050/api/drive/oauth2callback">
+                                        <button type="button" class="btn btn-secondary btn-sm" onclick="copyRedirectUri('modal-redirect-uri-ip')">Copy</button>
+                                    </div>
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <span style="font-size: 0.78rem; font-weight: 600; width: 85px;">Production:</span>
+                                        <input type="text" id="modal-redirect-uri-vercel" readonly style="font-family: monospace; font-size: 0.8rem; background: #ffffff; padding: 5px 8px; flex: 1; border: 1px solid var(--border); border-radius: var(--radius-sm);" value="https://<your-project>.vercel.app/api/drive/oauth2callback">
+                                        <button type="button" class="btn btn-secondary btn-sm" onclick="copyRedirectUri('modal-redirect-uri-vercel')">Copy</button>
+                                    </div>
+                                </div>
+                            </li>
+                            <li>Click <strong>CREATE</strong> and copy the generated <strong>Client ID</strong> and <strong>Client Secret</strong> into the fields below.</li>
+                        </ol>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="oauth-client-id">Google OAuth Client ID <span class="required">*</span></label>
+                        <input type="text" id="oauth-client-id" required placeholder="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com">
+                        <small class="text-muted">Format: <code>[id].apps.googleusercontent.com</code></small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="oauth-client-secret">Google OAuth Client Secret <span class="required">*</span></label>
+                        <input type="password" id="oauth-client-secret" required placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx">
+                        <small class="text-muted">🔒 Encrypted at rest using Fernet encryption (<code>CONFIG_ENCRYPTION_KEY</code>) before storing in the <code>System_Config</code> sheet. Never exposed to browsers or logs.</small>
+                    </div>
+
+                    <div id="oauth-config-msg" style="display: none; padding: 10px 14px; border-radius: 6px; font-size: 0.85rem; margin-top: 12px;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeConfigureOAuthModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="btn-save-oauth-config">Save Credentials &amp; Continue</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- PRINTABLE REPORT MODAL / VIEW -->
+    <div id="printable-report-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog modal-xl printable-modal-dialog">
+            <div class="modal-header no-print">
+                <div>
+                    <h3 id="print-modal-title">Printable Report Preview</h3>
+                    <p class="text-muted" style="font-size: 0.85rem; margin: 0;">Formatted for paper printing and PDF export via your browser dialog.</p>
+                </div>
+                <div class="modal-action-bar">
+                    <button type="button" class="btn btn-primary btn-sm" onclick="executeBrowserPrint()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                        Print Now
+                    </button>
+                    <button class="btn-close" onclick="closePrintableReportModal()">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body" id="print-document-content" style="max-height: 75vh; overflow-y: auto;">
+                <!-- Dynamically generated formatted printable document -->
+            </div>
+            <div class="modal-footer no-print">
+                <button type="button" class="btn btn-secondary" onclick="closePrintableReportModal()">Close Preview</button>
+                <button type="button" class="btn btn-primary" onclick="executeBrowserPrint()">Print / Save as PDF</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

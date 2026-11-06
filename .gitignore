@@ -1,0 +1,40 @@
+# Environment & Sensitive Credentials (NEVER COMMIT)
+.env
+.env.*
+*.env
+config/
+*.key
+*.pem
+*.p12
+*.json
+!vercel.json
+!package.json
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+.pytest_cache/
+
+# Local Temporary Data & Testing
+uploads/
+tmp/
+*.log
+scratch/
+
+# Vercel & Editor Configurations
+.vercel
+.vscode/
+.idea/
+
+# OS Artifacts
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
