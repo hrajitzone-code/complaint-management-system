@@ -7,7 +7,7 @@ import datetime
 import logging
 import threading
 import requests
-from flask import Flask, render_template, request, jsonify, session, redirect, send_file
+from flask import Flask, render_template, request, jsonify, session, redirect, send_file, send_from_directory
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -83,6 +83,12 @@ def handle_large_file(e):
         'status': 'error',
         'message': f"Uploaded file is too large. Maximum allowed size is {Config.MAX_CONTENT_LENGTH // (1024*1024)}MB."
     }), 413
+
+@app.route('/static/<path:filename>')
+def serve_static_asset(filename):
+    """Explicit static file handler for serverless and CDN fallback."""
+    static_dir = os.path.join(BASE_DIR, 'static')
+    return send_from_directory(static_dir, filename)
 
 @app.errorhandler(404)
 def handle_404(e):
