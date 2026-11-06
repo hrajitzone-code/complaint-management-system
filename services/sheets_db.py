@@ -167,59 +167,9 @@ class SheetsDB:
                     logger.info(f"Adding canonical headers to empty sheet '{title}'...")
                     ws.append_row(sanitize_row(headers), value_input_option='USER_ENTERED')
 
-        # Bootstrap seed data if Users or Departments are empty
-        cls._bootstrap_initial_data(existing_sheets)
-
-    @classmethod
-    def _bootstrap_initial_data(cls, existing_sheets):
-        """Seeds initial admin (if configured in env) and default departments if sheets are brand new."""
-        # Check Users sheet
-        users_ws = existing_sheets.get('Users')
-        if users_ws:
-            all_users = execute_with_retry(lambda: users_ws.get_all_values())
-            if len(all_users) <= 1: # Only header row or empty
-                if Config.INITIAL_ADMIN_PASSWORD:
-                    admin_email = Config.INITIAL_ADMIN_EMAIL
-                    admin_name = Config.INITIAL_ADMIN_NAME
-                    admin_pwd_hash = generate_password_hash(Config.INITIAL_ADMIN_PASSWORD)
-                    now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                    
-                    admin_row = [
-                        'USR-0001',
-                        admin_name,
-                        admin_email,
-                        admin_pwd_hash,
-                        'Super Admin',
-                        'Management',
-                        'TRUE',
-                        now_str,
-                        ''
-                    ]
-                    execute_with_retry(lambda: users_ws.append_row(sanitize_row(admin_row), value_input_option='USER_ENTERED'))
-                    logger.info(f"[BOOTSTRAP] Initial Super Admin '{admin_email}' created from environment config.")
-                else:
-                    logger.info("[BOOTSTRAP] No INITIAL_ADMIN_PASSWORD set; skipping auto-seeding. First-run UI setup enabled.")
-
-        # Check Departments sheet
-        dept_ws = existing_sheets.get('Departments')
-        if dept_ws:
-            all_depts = execute_with_retry(lambda: dept_ws.get_all_values())
-            if len(all_depts) <= 1:
-                now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                dept_rows = []
-                lead_email = Config.INITIAL_ADMIN_EMAIL or 'admin@organization.local'
-                for idx, (name, desc) in enumerate(DEFAULT_DEPARTMENTS, start=1):
-                    dept_rows.append(sanitize_row([
-                        f"DEP-{idx:03d}",
-                        name,
-                        desc,
-                        lead_email,
-                        'TRUE',
-                        now_str
-                    ]))
-                for r in dept_rows:
-                    execute_with_retry(lambda: dept_ws.append_row(r, value_input_option='USER_ENTERED'))
-                logger.info(f"[BOOTSTRAP] Seeded {len(dept_rows)} default departments.")
+        # Zero Dummy Data Policy: No auto-seeding of dummy users, departments or complaints
+        # All structure is strictly preserved with canonical headers only.
+        pass
 
     @classmethod
     def _get_worksheet(cls, name):
