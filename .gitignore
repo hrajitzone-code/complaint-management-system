@@ -41,3 +41,6 @@ Desktop.ini
 
 .vercel
 .env*
+
+# Data backups (CRITICAL: NEVER COMMIT)
+backups/
