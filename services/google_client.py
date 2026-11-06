@@ -111,7 +111,7 @@ def get_user_oauth_credentials():
                 token_uri='https://oauth2.googleapis.com/token',
                 client_id=client_id,
                 client_secret=client_secret,
-                scopes=Config.SCOPES
+                scopes=['https://www.googleapis.com/auth/drive']
             )
             # Verify or refresh if expired
             if not creds.valid or not access_token:
