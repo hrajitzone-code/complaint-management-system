@@ -335,6 +335,122 @@ class SheetsDB:
                 cls._invalidate_cache('Users')
                 break
 
+    @classmethod
+    def count_active_super_admins(cls):
+        """Returns the number of active Super Admin accounts."""
+        users = cls.get_all_users()
+        return sum(1 for u in users if u.get('Role') == 'Super Admin' and str(u.get('Is Active', '')).upper() == 'TRUE')
+
+    @classmethod
+    def update_user(cls, user_id, full_name=None, email=None, role=None, department=None, is_active=None, new_password=None):
+        """
+        Updates an existing user's details in the Google Sheets Users worksheet.
+        Preserves User ID, Created At, and password hash (unless new_password provided).
+        Validates email uniqueness across other accounts.
+        If email changes, safely cascades new email to Complaints to preserve ownership.
+        """
+        with cls._db_lock:
+            ws = cls._get_worksheet('Users')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            if not rows or len(rows) < 2:
+                raise ValueError(f"User '{user_id}' not found.")
+
+            headers = [h.strip() for h in rows[0]]
+            id_idx = headers.index('User ID') if 'User ID' in headers else 0
+            name_idx = headers.index('Full Name') if 'Full Name' in headers else 1
+            email_idx = headers.index('Email') if 'Email' in headers else 2
+            pwd_idx = headers.index('Password Hash') if 'Password Hash' in headers else 3
+            role_idx = headers.index('Role') if 'Role' in headers else 4
+            dept_idx = headers.index('Department') if 'Department' in headers else 5
+            active_idx = headers.index('Is Active') if 'Is Active' in headers else 6
+
+            clean_email = email.lower().strip() if email else None
+            found_row = None
+            old_email = None
+
+            for r_idx, r in enumerate(rows[1:], start=2):
+                curr_id = r[id_idx].strip() if len(r) > id_idx else ''
+                curr_email = r[email_idx].strip().lower() if len(r) > email_idx else ''
+                if curr_id == str(user_id).strip():
+                    found_row = r_idx
+                    old_email = curr_email
+                elif clean_email and curr_email == clean_email:
+                    raise ValueError(f"Email '{clean_email}' is already in use by another user ({curr_id}).")
+
+            if not found_row:
+                raise ValueError(f"User '{user_id}' not found.")
+
+            current_row = list(rows[found_row - 1])
+            while len(current_row) < len(headers):
+                current_row.append('')
+
+            if full_name is not None and full_name.strip():
+                current_row[name_idx] = sanitize_cell_value(full_name.strip())
+
+            if clean_email:
+                current_row[email_idx] = sanitize_cell_value(clean_email)
+
+            if role is not None and role.strip():
+                valid_roles = ('Super Admin', 'Admin', 'Support Staff', 'User')
+                if role.strip() not in valid_roles:
+                    raise ValueError(f"Invalid role. Allowed roles: {', '.join(valid_roles)}")
+                current_row[role_idx] = sanitize_cell_value(role.strip())
+
+            if department is not None:
+                current_row[dept_idx] = sanitize_cell_value(department.strip() or 'General')
+
+            if is_active is not None:
+                current_row[active_idx] = 'TRUE' if str(is_active).upper() in ('TRUE', '1', 'YES') else 'FALSE'
+
+            if new_password and str(new_password).strip():
+                if len(str(new_password).strip()) < 6:
+                    raise ValueError("Password must be at least 6 characters.")
+                current_row[pwd_idx] = generate_password_hash(str(new_password).strip())
+
+            execute_with_retry(lambda: ws.update(f'A{found_row}', [sanitize_row(current_row)], value_input_option='USER_ENTERED'))
+            cls._invalidate_cache('Users')
+
+            # Cascade email update to Complaints to preserve complaint ownership if email changed
+            if clean_email and old_email and clean_email != old_email:
+                cls._cascade_user_email_change(old_email, clean_email)
+
+            return {
+                'User ID': user_id,
+                'Full Name': current_row[name_idx],
+                'Email': current_row[email_idx],
+                'Role': current_row[role_idx],
+                'Department': current_row[dept_idx],
+                'Is Active': current_row[active_idx],
+                'Created At': current_row[headers.index('Created At')] if 'Created At' in headers else ''
+            }
+
+    @classmethod
+    def _cascade_user_email_change(cls, old_email, new_email):
+        """
+        When a user's email is updated, cascades the new email to existing complaints
+        where Complainant Email == old_email, preserving complaint ownership.
+        """
+        try:
+            ws = cls._get_worksheet('Complaints')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            if not rows or len(rows) < 2:
+                return
+            headers = [h.strip() for h in rows[0]]
+            if 'Complainant Email' not in headers:
+                return
+            c_email_idx = headers.index('Complainant Email')
+            updated = False
+            for r_idx, r in enumerate(rows[1:], start=2):
+                if len(r) > c_email_idx and r[c_email_idx].strip().lower() == old_email.lower():
+                    r_val = sanitize_cell_value(new_email.lower())
+                    col_letter = gspread.utils.rowcol_to_a1(r_idx, c_email_idx + 1)
+                    execute_with_retry(lambda cell=col_letter, val=r_val: ws.update(cell, [[val]], value_input_option='USER_ENTERED'))
+                    updated = True
+            if updated:
+                cls._invalidate_cache('Complaints')
+        except Exception as e:
+            logger.warning(f"Could not cascade email change in complaints: {e}")
+
     # =========================================================================
     # DEPARTMENT OPERATIONS
     # =========================================================================

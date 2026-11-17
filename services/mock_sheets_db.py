@@ -155,6 +155,54 @@ class MockSheetsDB:
                 break
 
     @classmethod
+    def count_active_super_admins(cls):
+        return sum(1 for u in cls._store['Users'] if u.get('Role') == 'Super Admin' and str(u.get('Is Active', '')).upper() == 'TRUE')
+
+    @classmethod
+    def update_user(cls, user_id, full_name=None, email=None, role=None, department=None, is_active=None, new_password=None):
+        user = None
+        old_email = None
+        clean_email = email.lower().strip() if email else None
+
+        for u in cls._store['Users']:
+            if u.get('User ID', '').strip() == str(user_id).strip():
+                user = u
+                old_email = u.get('Email', '').lower()
+            elif clean_email and u.get('Email', '').lower().strip() == clean_email:
+                raise ValueError(f"Email '{clean_email}' is already in use by another user.")
+
+        if not user:
+            raise ValueError(f"User '{user_id}' not found.")
+
+        if full_name is not None and full_name.strip():
+            user['Full Name'] = full_name.strip()
+        if clean_email:
+            user['Email'] = clean_email
+        if role is not None and role.strip():
+            valid_roles = ('Super Admin', 'Admin', 'Support Staff', 'User')
+            if role.strip() not in valid_roles:
+                raise ValueError(f"Invalid role. Allowed roles: {', '.join(valid_roles)}")
+            user['Role'] = role.strip()
+        if department is not None:
+            user['Department'] = department.strip() or 'General'
+        if is_active is not None:
+            user['Is Active'] = 'TRUE' if str(is_active).upper() in ('TRUE', '1', 'YES') else 'FALSE'
+        if new_password and str(new_password).strip():
+            if len(str(new_password).strip()) < 6:
+                raise ValueError("Password must be at least 6 characters.")
+            user['Password Hash'] = generate_password_hash(str(new_password).strip())
+
+        # Cascade email to complaints if changed
+        if clean_email and old_email and clean_email != old_email:
+            for c in cls._store['Complaints']:
+                if c.get('Complainant Email', '').lower() == old_email:
+                    c['Complainant Email'] = clean_email
+
+        safe = dict(user)
+        safe.pop('Password Hash', None)
+        return safe
+
+    @classmethod
     def get_all_departments(cls, include_inactive=False):
         if include_inactive:
             return [dict(d) for d in cls._store['Departments']]

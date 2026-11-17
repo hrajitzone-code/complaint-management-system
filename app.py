@@ -31,6 +31,7 @@ from services.auth_service import (
     login_required,
     staff_required,
     admin_required,
+    super_admin_required,
     verify_and_login_user
 )
 from services.report_service import (
@@ -1144,6 +1145,10 @@ def admin_create_user():
     if role not in valid_roles:
         return jsonify({'status': 'error', 'message': f"Invalid role. Allowed roles: {', '.join(valid_roles)}"}), 400
 
+    current_user = get_current_user()
+    if role == 'Super Admin' and current_user.get('role') != 'Super Admin':
+        return jsonify({'status': 'error', 'message': 'Access forbidden. Only Super Admins can create Super Admin accounts.'}), 403
+
     if not full_name or not email or not password:
         return jsonify({'status': 'error', 'message': 'Full name, email, and password are required.'}), 400
 
@@ -1156,6 +1161,163 @@ def admin_create_user():
     except Exception as e:
         logger.error(f"Error creating user: {e}")
         return jsonify({'status': 'error', 'message': f"Failed to create user: {str(e)}"}), 500
+
+@app.route('/api/users/<user_id>', methods=['GET'])
+@admin_required
+def get_user_details(user_id):
+    """Retrieves safe user details for editing (excluding password hash)."""
+    db = get_db()
+    u = db.find_user_by_id(user_id)
+    if not u:
+        return jsonify({'status': 'error', 'message': f"User '{user_id}' not found."}), 404
+    safe_u = dict(u)
+    safe_u.pop('Password Hash', None)
+    return jsonify({'status': 'success', 'user': safe_u})
+
+@app.route('/api/users/<user_id>', methods=['PUT'])
+@app.route('/api/users/<user_id>/update', methods=['POST'])
+@admin_required
+def update_user_endpoint(user_id):
+    """
+    Updates an existing user.
+    Enforces RBAC & prevents unauthorized privilege escalation:
+    - Super Admin & Admin can edit users.
+    - Only Super Admin can edit Super Admin accounts.
+    - Only Super Admin can assign the Super Admin role.
+    - Users cannot deactivate their own active account.
+    - Users cannot remove their own Super Admin role.
+    - Cannot deactivate the last remaining active Super Admin.
+    - Validates email format and uniqueness.
+    - Supports secure password reset without retrieving/exposing existing passwords.
+    """
+    current_user = get_current_user()
+    db = get_db()
+    target_user = db.find_user_by_id(user_id)
+    if not target_user:
+        return jsonify({'status': 'error', 'message': f"User '{user_id}' not found."}), 404
+
+    data = request.get_json(silent=True) or request.form or {}
+    full_name = (data.get('full_name') or target_user.get('Full Name', '')).strip()
+    email = (data.get('email') or target_user.get('Email', '')).strip().lower()
+    role = (data.get('role') or target_user.get('Role', 'User')).strip()
+    department = (data.get('department') or target_user.get('Department', 'General')).strip()
+    is_active = data.get('is_active')
+    new_password = data.get('new_password') or data.get('password')
+
+    # Validations
+    if not full_name:
+        return jsonify({'status': 'error', 'message': 'Full Name is required.'}), 400
+    if not email:
+        return jsonify({'status': 'error', 'message': 'Email address is required.'}), 400
+    if '@' not in email or '.' not in email.split('@')[-1]:
+        return jsonify({'status': 'error', 'message': 'Please enter a valid email address.'}), 400
+
+    valid_roles = ('Super Admin', 'Admin', 'Support Staff', 'User')
+    if role not in valid_roles:
+        return jsonify({'status': 'error', 'message': f"Invalid role. Allowed roles: {', '.join(valid_roles)}"}), 400
+
+    # Privilege escalation guards
+    is_current_super = current_user.get('role') == 'Super Admin'
+    target_is_super = target_user.get('Role') == 'Super Admin'
+
+    if target_is_super and not is_current_super:
+        return jsonify({'status': 'error', 'message': 'Access forbidden. Only Super Admins can edit Super Admin accounts.'}), 403
+
+    if role == 'Super Admin' and not is_current_super:
+        return jsonify({'status': 'error', 'message': 'Access forbidden. Only Super Admins can assign the Super Admin role.'}), 403
+
+    # Self-deactivation guard
+    if current_user.get('user_id') == user_id:
+        if is_active is not None and str(is_active).upper() in ('FALSE', '0', 'NO'):
+            return jsonify({'status': 'error', 'message': 'You cannot deactivate your own active account.'}), 400
+        if target_is_super and role != 'Super Admin':
+            return jsonify({'status': 'error', 'message': 'You cannot remove your own Super Admin role.'}), 400
+
+    # Last Super Admin deactivation guard
+    if target_is_super and is_active is not None and str(is_active).upper() in ('FALSE', '0', 'NO'):
+        active_supers = db.count_active_super_admins() if hasattr(db, 'count_active_super_admins') else 1
+        if active_supers <= 1:
+            return jsonify({'status': 'error', 'message': 'Cannot deactivate the system’s sole active Super Admin.'}), 400
+
+    # Optional password reset validation
+    if new_password and str(new_password).strip():
+        if len(str(new_password).strip()) < 6:
+            return jsonify({'status': 'error', 'message': 'Password must be at least 6 characters.'}), 400
+
+    try:
+        updated = db.update_user(
+            user_id=user_id,
+            full_name=full_name,
+            email=email,
+            role=role,
+            department=department,
+            is_active=is_active,
+            new_password=new_password
+        )
+
+        # Synchronize active session if current user edited their own details
+        if current_user.get('user_id') == user_id:
+            current_user['name'] = updated['Full Name']
+            current_user['email'] = updated['Email']
+            current_user['role'] = updated['Role']
+            current_user['department'] = updated['Department']
+            session['user'] = current_user
+            session.modified = True
+
+        return jsonify({
+            'status': 'success',
+            'message': f"User '{full_name}' updated successfully.",
+            'user': updated
+        })
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 400
+    except Exception as e:
+        logger.error(f"Error updating user '{user_id}': {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to update user: {str(e)}"}), 500
+
+@app.route('/api/users/<user_id>/status', methods=['PATCH', 'POST'])
+@admin_required
+def toggle_user_status(user_id):
+    """Activates or deactivates an existing user account."""
+    current_user = get_current_user()
+    db = get_db()
+    target_user = db.find_user_by_id(user_id)
+    if not target_user:
+        return jsonify({'status': 'error', 'message': f"User '{user_id}' not found."}), 404
+
+    data = request.get_json(silent=True) or request.form or {}
+    new_status = data.get('is_active')
+    if new_status is None:
+        # Toggle current status
+        current_status = str(target_user.get('Is Active', 'TRUE')).upper() == 'TRUE'
+        new_status = 'FALSE' if current_status else 'TRUE'
+
+    is_deactivating = str(new_status).upper() in ('FALSE', '0', 'NO')
+
+    # Self-deactivation guard
+    if current_user.get('user_id') == user_id and is_deactivating:
+        return jsonify({'status': 'error', 'message': 'You cannot deactivate your own active account.'}), 400
+
+    # Super Admin protection
+    if target_user.get('Role') == 'Super Admin':
+        if current_user.get('role') != 'Super Admin':
+            return jsonify({'status': 'error', 'message': 'Access forbidden. Only Super Admins can alter Super Admin status.'}), 403
+        if is_deactivating:
+            active_supers = db.count_active_super_admins() if hasattr(db, 'count_active_super_admins') else 1
+            if active_supers <= 1:
+                return jsonify({'status': 'error', 'message': 'Cannot deactivate the system’s sole active Super Admin.'}), 400
+
+    try:
+        updated = db.update_user(user_id=user_id, is_active=new_status)
+        status_label = "activated" if str(updated['Is Active']).upper() == 'TRUE' else "deactivated"
+        return jsonify({
+            'status': 'success',
+            'message': f"User '{updated['Full Name']}' has been {status_label}.",
+            'user': updated
+        })
+    except Exception as e:
+        logger.error(f"Error updating status for user '{user_id}': {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to change user status: {str(e)}"}), 500
 
 # =============================================================================
 # REPORTS & ANALYTICS APIS

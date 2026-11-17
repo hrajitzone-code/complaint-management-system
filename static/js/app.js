@@ -935,7 +935,7 @@ async function loadDepartments() {
 
 function populateDepartmentDropdowns() {
     // 1. Regular single-selects
-    const singleSelects = ['reg-dept', 'modal-user-dept', 'manage-dept-filter', 'delete-dept-reassign-select'];
+    const singleSelects = ['reg-dept', 'modal-user-dept', 'edit-user-dept', 'manage-dept-filter', 'delete-dept-reassign-select'];
     singleSelects.forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
@@ -1824,21 +1824,50 @@ async function loadSettingsData() {
     loadAdminDepts();
 }
 
+let currentUsersList = [];
+
 async function loadAdminUsers() {
     try {
         const res = await fetch('/api/users');
         const data = await res.json();
         const tbody = document.getElementById('settings-users-table');
         if (res.ok && data.users) {
-            tbody.innerHTML = data.users.map(u => `
-                <tr>
-                    <td><code>${u['User ID']}</code></td>
-                    <td>${escapeHtml(u['Full Name'])}</td>
-                    <td>${escapeHtml(u.Email)}</td>
-                    <td><span class="badge ${u.Role.includes('Admin') ? 'badge-status-in-progress' : 'badge-prio-low'}">${u.Role}</span></td>
-                    <td>${escapeHtml(u.Department || 'General')}</td>
-                </tr>
-            `).join('');
+            currentUsersList = data.users;
+            const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
+            const isAdmin = currentUser && (currentUser.role === 'Admin' || isSuperAdmin);
+
+            tbody.innerHTML = data.users.map(u => {
+                const isActive = String(u['Is Active'] || 'TRUE').toUpperCase() === 'TRUE';
+                const isTargetSuper = u.Role === 'Super Admin';
+                const canEdit = isSuperAdmin || (isAdmin && !isTargetSuper);
+                const roleBadgeClass = u.Role === 'Super Admin'
+                    ? 'badge-status-in-progress'
+                    : u.Role === 'Admin'
+                    ? 'badge-prio-high'
+                    : u.Role === 'Support Staff'
+                    ? 'badge-info'
+                    : 'badge-prio-low';
+
+                return `
+                    <tr>
+                        <td><code>${escapeHtml(u['User ID'])}</code></td>
+                        <td><strong>${escapeHtml(u['Full Name'])}</strong></td>
+                        <td>${escapeHtml(u.Email)}</td>
+                        <td><span class="badge ${roleBadgeClass}">${escapeHtml(u.Role)}</span></td>
+                        <td>${escapeHtml(u.Department || 'General')}</td>
+                        <td><span class="badge ${isActive ? 'badge-active' : 'badge-inactive'}">${isActive ? 'Active' : 'Inactive'}</span></td>
+                        <td>
+                            ${canEdit ? `
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="openEditUserModal('${escapeHtml(u['User ID'])}')">
+                                    Edit
+                                </button>
+                            ` : `
+                                <span class="text-muted text-sm" title="Super Admin accounts can only be edited by Super Admins">Protected</span>
+                            `}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
         }
     } catch (e) {
         console.error("Failed to load users:", e);
@@ -1876,6 +1905,140 @@ async function submitCreateUser(e) {
         }
     } catch (err) {
         showToast('Network error creating user.', 'error');
+    }
+}
+
+function openEditUserModal(userId) {
+    const user = currentUsersList.find(u => u['User ID'] === userId);
+    if (!user) {
+        showToast("User details not found. Please refresh the users list.", "error");
+        return;
+    }
+
+    const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
+    const isTargetSuper = user.Role === 'Super Admin';
+
+    if (isTargetSuper && !isSuperAdmin) {
+        showToast("Access forbidden: Super Admin accounts can only be edited by Super Admins.", "error");
+        return;
+    }
+
+    document.getElementById('edit-user-id').value = user['User ID'];
+    document.getElementById('edit-user-id-display').value = user['User ID'];
+    document.getElementById('edit-user-name').value = user['Full Name'] || '';
+    document.getElementById('edit-user-email').value = user.Email || '';
+    document.getElementById('edit-user-password').value = '';
+
+    // Populate and select department
+    populateDepartmentDropdowns();
+    const deptSelect = document.getElementById('edit-user-dept');
+    if (deptSelect) {
+        deptSelect.value = user.Department || 'General';
+    }
+
+    // Role options & RBAC guard
+    const roleSelect = document.getElementById('edit-user-role');
+    const superOpt = document.getElementById('opt-edit-role-super-admin');
+    const roleNote = document.getElementById('edit-user-role-note');
+
+    if (!isSuperAdmin) {
+        if (superOpt) superOpt.disabled = true;
+        if (roleNote) roleNote.textContent = 'Only Super Admins can assign or promote to the Super Admin role.';
+    } else {
+        if (superOpt) superOpt.disabled = false;
+        if (roleNote) roleNote.textContent = '';
+    }
+    roleSelect.value = user.Role || 'User';
+
+    // Account status & self-deactivation guard
+    const statusSelect = document.getElementById('edit-user-status');
+    const statusNote = document.getElementById('edit-user-status-note');
+    const isSelf = currentUser && (currentUser.user_id === user['User ID'] || currentUser.email === user.Email);
+
+    if (isSelf) {
+        statusSelect.value = 'TRUE';
+        statusSelect.disabled = true;
+        if (statusNote) statusNote.textContent = 'You cannot deactivate your own active account.';
+    } else {
+        statusSelect.disabled = false;
+        statusSelect.value = String(user['Is Active'] || 'TRUE').toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE';
+        if (statusNote) statusNote.textContent = '';
+    }
+
+    document.getElementById('edit-user-modal').style.display = 'flex';
+}
+
+function closeEditUserModal() {
+    document.getElementById('edit-user-modal').style.display = 'none';
+}
+
+async function submitEditUser(e) {
+    e.preventDefault();
+    const userId = document.getElementById('edit-user-id').value.trim();
+    const fullName = document.getElementById('edit-user-name').value.trim();
+    const email = document.getElementById('edit-user-email').value.trim().toLowerCase();
+    const dept = document.getElementById('edit-user-dept').value || 'General';
+    const role = document.getElementById('edit-user-role').value;
+    const statusSelect = document.getElementById('edit-user-status');
+    const isActive = statusSelect.disabled ? 'TRUE' : statusSelect.value;
+    const newPassword = document.getElementById('edit-user-password').value.trim();
+
+    if (!fullName || !email) {
+        showToast("Full Name and Email Address are required.", "error");
+        return;
+    }
+
+    if (newPassword && newPassword.length < 6) {
+        showToast("Reset password must be at least 6 characters.", "error");
+        return;
+    }
+
+    const submitBtn = document.getElementById('edit-user-submit-btn');
+    const originalText = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving...';
+
+    const payload = {
+        full_name: fullName,
+        email: email,
+        department: dept,
+        role: role,
+        is_active: isActive
+    };
+    if (newPassword) {
+        payload.new_password = newPassword;
+    }
+
+    try {
+        const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        if (res.ok && data.status === 'success') {
+            showToast(data.message || `User '${fullName}' updated successfully.`, 'success');
+            closeEditUserModal();
+            await loadAdminUsers();
+
+            // If current logged-in user edited their own profile, sync display name
+            if (currentUser && (currentUser.user_id === userId || currentUser.email === email)) {
+                currentUser.name = fullName;
+                currentUser.email = email;
+                currentUser.role = role;
+                currentUser.department = dept;
+                renderUserInterface();
+            }
+        } else {
+            showToast(data.message || "Failed to update user.", "error");
+        }
+    } catch (err) {
+        console.error("Error updating user:", err);
+        showToast("Network error updating user.", "error");
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
     }
 }
 

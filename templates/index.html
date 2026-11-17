@@ -712,10 +712,12 @@
                                             <th>Email</th>
                                             <th>Role</th>
                                             <th>Department</th>
+                                            <th>Status</th>
+                                            <th>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody id="settings-users-table">
-                                        <tr><td colspan="5" class="text-center py-4 text-muted">Loading users...</td></tr>
+                                        <tr><td colspan="7" class="text-center py-4 text-muted">Loading users...</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -1596,7 +1598,64 @@
         </div>
     </div>
 
-    <!-- CREATE DEPARTMENT MODAL -->
+    <!-- EDIT USER MODAL -->
+    <div id="edit-user-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>Edit User</h3>
+                <button class="btn-close" onclick="closeEditUserModal()">&times;</button>
+            </div>
+            <form onsubmit="submitEditUser(event)">
+                <input type="hidden" id="edit-user-id">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>User ID</label>
+                        <input type="text" id="edit-user-id-display" disabled style="background: #f1f5f9; cursor: not-allowed; font-family: monospace;">
+                    </div>
+                    <div class="form-group">
+                        <label>Full Name <span class="required">*</span></label>
+                        <input type="text" id="edit-user-name" required placeholder="Full Name">
+                    </div>
+                    <div class="form-group">
+                        <label>Email Address <span class="required">*</span></label>
+                        <input type="email" id="edit-user-email" required placeholder="user@example.com">
+                        <small class="text-muted">Updating email preserves all complaint ownership, audit logs, and assignments.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Department <span class="required">*</span></label>
+                        <select id="edit-user-dept" required></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Role <span class="required">*</span></label>
+                        <select id="edit-user-role" required>
+                            <option value="User">User / Complainant</option>
+                            <option value="Support Staff">Support Staff</option>
+                            <option value="Admin">Admin</option>
+                            <option value="Super Admin" id="opt-edit-role-super-admin">Super Admin</option>
+                        </select>
+                        <small class="text-muted" id="edit-user-role-note"></small>
+                    </div>
+                    <div class="form-group">
+                        <label>Account Status <span class="required">*</span></label>
+                        <select id="edit-user-status" required>
+                            <option value="TRUE">Active</option>
+                            <option value="FALSE">Inactive (Disabled)</option>
+                        </select>
+                        <small class="text-muted" id="edit-user-status-note"></small>
+                    </div>
+                    <div class="form-group">
+                        <label>Reset Password (Optional)</label>
+                        <input type="password" id="edit-user-password" minlength="6" placeholder="Leave blank to keep existing password" autocomplete="new-password">
+                        <small class="text-muted">Existing passwords are encrypted and never shown. Enter a new password only if resetting.</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeEditUserModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="edit-user-submit-btn">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <div id="create-dept-modal" class="modal-backdrop" style="display: none;">
         <div class="modal-dialog">
             <div class="modal-header">

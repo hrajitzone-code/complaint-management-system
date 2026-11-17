@@ -12,6 +12,9 @@ def login_required(f):
         u = get_current_user()
         if not u:
             return jsonify({'status': 'error', 'message': 'Authentication required. Please login.'}), 401
+        if str(u.get('is_active', 'TRUE')).upper() == 'FALSE':
+            session.clear()
+            return jsonify({'status': 'error', 'message': 'Account is disabled. Please contact your administrator.'}), 403
         return f(*args, **kwargs)
     return decorated
 
@@ -21,6 +24,9 @@ def staff_required(f):
         u = get_current_user()
         if not u:
             return jsonify({'status': 'error', 'message': 'Authentication required. Please login.'}), 401
+        if str(u.get('is_active', 'TRUE')).upper() == 'FALSE':
+            session.clear()
+            return jsonify({'status': 'error', 'message': 'Account is disabled. Please contact your administrator.'}), 403
         if u.get('role') not in ('Super Admin', 'Admin', 'Support Staff'):
             return jsonify({'status': 'error', 'message': 'Access forbidden. Staff or Admin privileges required.'}), 403
         return f(*args, **kwargs)
@@ -32,8 +38,25 @@ def admin_required(f):
         u = get_current_user()
         if not u:
             return jsonify({'status': 'error', 'message': 'Authentication required. Please login.'}), 401
+        if str(u.get('is_active', 'TRUE')).upper() == 'FALSE':
+            session.clear()
+            return jsonify({'status': 'error', 'message': 'Account is disabled. Please contact your administrator.'}), 403
         if u.get('role') not in ('Super Admin', 'Admin'):
             return jsonify({'status': 'error', 'message': 'Access forbidden. Administrator privileges required.'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+def super_admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        u = get_current_user()
+        if not u:
+            return jsonify({'status': 'error', 'message': 'Authentication required. Please login.'}), 401
+        if str(u.get('is_active', 'TRUE')).upper() == 'FALSE':
+            session.clear()
+            return jsonify({'status': 'error', 'message': 'Account is disabled. Please contact your administrator.'}), 403
+        if u.get('role') != 'Super Admin':
+            return jsonify({'status': 'error', 'message': 'Access forbidden. Super Administrator privileges required.'}), 403
         return f(*args, **kwargs)
     return decorated
 
@@ -69,7 +92,8 @@ def verify_and_login_user(email, password, db_engine):
         'name': user_record.get('Full Name'),
         'email': user_record.get('Email'),
         'role': user_record.get('Role', 'User'),
-        'department': user_record.get('Department', 'General')
+        'department': user_record.get('Department', 'General'),
+        'is_active': str(user_record.get('Is Active', 'TRUE')).upper()
     }
 
     session.permanent = True
