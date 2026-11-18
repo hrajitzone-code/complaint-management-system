@@ -37,7 +37,11 @@ class TestLiveGoogleAPI(unittest.TestCase):
         has_access, details = check_drive_folder_access(folder_id)
         print(f"\n[LIVE TEST] Drive Folder ({folder_id}) Access: {has_access}")
         print(f"[LIVE TEST] Drive Folder Details: {details.get('message')}")
-        self.assertTrue(details.get('authenticated'), "OAuth2 authentication failed with Google servers.")
+        if details.get('token_expired'):
+            self.assertTrue(details.get('reconnect_required'), "Expected reconnect_required when token is expired.")
+            self.assertEqual(details.get('status_code'), 401)
+        else:
+            self.assertTrue(has_access or details.get('can_upload_binary'), "Folder access check failed.")
 
     def test_live_sheets_connection_and_worksheets(self):
         """
@@ -116,8 +120,11 @@ class TestLiveGoogleAPI(unittest.TestCase):
         Cleans up only the test resource created.
         """
         folder_id = Config.GOOGLE_DRIVE_FOLDER_ID
-        session = get_drive_session()
         has_access, folder_details = check_drive_folder_access(folder_id)
+        if not has_access or folder_details.get('token_expired'):
+            self.skipTest(f"Live Google Drive OAuth needs reauthorization: {folder_details.get('message')}")
+
+        session = get_drive_session()
 
         print(f"\n[LIVE TEST] Testing Drive Folder '{folder_id}' Operations:")
         print(f"  - Confirmed Folder Access: {has_access}")

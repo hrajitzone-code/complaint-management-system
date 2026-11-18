@@ -193,6 +193,7 @@ def get_supported_redirect_uris():
     Returns the list of supported redirect URIs for localhost, office LAN, and production Vercel.
     """
     uris = [
+        "https://complaint-management-system-sigma-nine.vercel.app/api/drive/oauth2callback",
         "http://localhost:5050/api/drive/oauth2callback",
         "http://127.0.0.1:5050/api/drive/oauth2callback",
         "http://192.168.1.55:5050/api/drive/oauth2callback",
@@ -218,15 +219,24 @@ def resolve_active_redirect_uri():
     """
     if os.environ.get('OAUTH_REDIRECT_URI'):
         return os.environ.get('OAUTH_REDIRECT_URI').strip()
+
+    try:
+        host = request.headers.get('X-Forwarded-Host') or request.host
+        if host:
+            if 'localhost' in host or '127.0.0.1' in host or '192.168.' in host:
+                return f"http://{host}/api/drive/oauth2callback"
+            return f"https://{host}/api/drive/oauth2callback"
+    except Exception:
+        pass
+
     if os.environ.get('VERCEL') == '1' or os.environ.get('VERCEL_URL'):
         v_url = os.environ.get('VERCEL_URL', '').strip().rstrip('/')
         if v_url:
             if not v_url.startswith('http'):
                 v_url = f"https://{v_url}"
             return f"{v_url}/api/drive/oauth2callback"
-    proto = request.headers.get('X-Forwarded-Proto', request.scheme)
-    host = request.headers.get('X-Forwarded-Host', request.host)
-    return f"{proto}://{host}/api/drive/oauth2callback"
+
+    return "https://complaint-management-system-sigma-nine.vercel.app/api/drive/oauth2callback"
 
 @app.route('/api/drive/status', methods=['GET'])
 def get_drive_status_endpoint():
@@ -294,6 +304,8 @@ def get_drive_auth_url():
         'scope': 'https://www.googleapis.com/auth/drive',
         'access_type': 'offline',
         'prompt': 'consent',
+        'include_granted_scopes': 'true',
+        'login_hint': 'hr.ajitzone@gmail.com',
         'state': state_token
     }
     auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + urllib.parse.urlencode(params)
@@ -341,13 +353,24 @@ def drive_oauth2_callback():
         token_data = token_resp.json()
         refresh_token = token_data.get('refresh_token')
         access_token = token_data.get('access_token')
+        expires_in = token_data.get('expires_in', 3600)
 
         db = get_db()
         # Stored encrypted in System_Config via SheetsDB
-        if refresh_token:
-            db.set_system_config('google_user_refresh_token', refresh_token, updated_by='oauth_callback')
-        if access_token:
-            db.set_system_config('google_user_access_token', access_token, updated_by='oauth_callback')
+        # CRITICAL RULE: Never overwrite a valid refresh token with a missing, None, or empty token!
+        if refresh_token and str(refresh_token).strip():
+            db.set_system_config('google_user_refresh_token', str(refresh_token).strip(), updated_by='oauth_callback')
+            logger.info("New Google Drive refresh token saved to System_Config successfully.")
+        else:
+            logger.warning("No new refresh token in Google OAuth response; existing refresh token retained.")
+
+        if access_token and str(access_token).strip():
+            db.set_system_config('google_user_access_token', str(access_token).strip(), updated_by='oauth_callback')
+            try:
+                expiry_dt = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=int(expires_in))
+                db.set_system_config('google_user_token_expiry', expiry_dt.strftime('%Y-%m-%d %H:%M:%S'), updated_by='oauth_callback')
+            except Exception as exp_err:
+                logger.debug(f"Could not calculate/save token expiry: {exp_err}")
 
         # Identify authenticated user email
         user_email = ''
@@ -370,6 +393,7 @@ def drive_oauth2_callback():
         verify_success = False
         verify_error = ''
         try:
+            from services.drive_storage import test_drive_upload_and_download
             test_res = test_drive_upload_and_download()
             verify_success = test_res.get('verified', False)
             logger.info(f"Drive OAuth live probe successfully verified: {test_res.get('file_id')}")
@@ -384,6 +408,96 @@ def drive_oauth2_callback():
     except Exception as e:
         logger.error(f"Exception during OAuth callback: {e}")
         return redirect(f"/#settings?drive_auth=error&msg={urllib.parse.quote(str(e))}")
+
+@app.route('/api/drive/exchange-code', methods=['POST'])
+@admin_required
+def exchange_oauth_code_endpoint():
+    """
+    Allows Admin/Super Admin to manually exchange an authorization code or tokens,
+    persisting them securely with encryption to System_Config and running the live probe test.
+    """
+    data = request.get_json(silent=True) or {}
+    code = (data.get('code') or '').strip()
+    direct_refresh_token = (data.get('refresh_token') or '').strip()
+    redirect_uri = (data.get('redirect_uri') or '').strip() or resolve_active_redirect_uri()
+
+    client_id, client_secret = get_oauth_client_config()
+    if not client_id or not client_secret:
+        return jsonify({'status': 'error', 'message': 'Client ID and Client Secret not configured.'}), 400
+
+    db = get_db()
+    current_user = get_current_user()
+    updater = current_user.get('email', 'admin')
+
+    user_email = ''
+    if code:
+        try:
+            token_resp = requests.post(
+                'https://oauth2.googleapis.com/token',
+                data={
+                    'code': code,
+                    'client_id': client_id,
+                    'client_secret': client_secret,
+                    'redirect_uri': redirect_uri,
+                    'grant_type': 'authorization_code'
+                },
+                timeout=15
+            )
+            if token_resp.status_code != 200:
+                return jsonify({
+                    'status': 'error',
+                    'message': f"Token exchange failed (HTTP {token_resp.status_code}): {token_resp.text}"
+                }), 400
+
+            token_data = token_resp.json()
+            refresh_token = token_data.get('refresh_token')
+            access_token = token_data.get('access_token')
+            expires_in = token_data.get('expires_in', 3600)
+
+            if refresh_token and str(refresh_token).strip():
+                db.set_system_config('google_user_refresh_token', str(refresh_token).strip(), updated_by=updater)
+            if access_token and str(access_token).strip():
+                db.set_system_config('google_user_access_token', str(access_token).strip(), updated_by=updater)
+                expiry_dt = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=int(expires_in))
+                db.set_system_config('google_user_token_expiry', expiry_dt.strftime('%Y-%m-%d %H:%M:%S'), updated_by=updater)
+
+            if access_token:
+                try:
+                    about_resp = requests.get(
+                        'https://www.googleapis.com/drive/v3/about?fields=user',
+                        headers={'Authorization': f"Bearer {access_token}"},
+                        timeout=10
+                    )
+                    if about_resp.status_code == 200:
+                        user_email = about_resp.json().get('user', {}).get('emailAddress', '')
+                        if user_email:
+                            db.set_system_config('google_user_email', user_email, updated_by=updater)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': f"Error exchanging code: {str(e)}"}), 500
+
+    elif direct_refresh_token:
+        db.set_system_config('google_user_refresh_token', direct_refresh_token, updated_by=updater)
+    else:
+        return jsonify({'status': 'error', 'message': 'Either code or refresh_token is required.'}), 400
+
+    # Run verification test
+    try:
+        from services.drive_storage import test_drive_upload_and_download
+        test_res = test_drive_upload_and_download()
+        return jsonify({
+            'status': 'success',
+            'message': 'Token exchanged and live upload/download verified successfully.',
+            'verification': test_res
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'partial_success',
+            'message': f"Tokens saved, but live test failed: {str(e)}",
+            'error': str(e)
+        }), 200
 
 @app.route('/api/drive/test-upload', methods=['POST'])
 @admin_required

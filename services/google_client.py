@@ -76,12 +76,14 @@ def get_user_oauth_credentials():
     client_id, client_secret = get_oauth_client_config()
     refresh_token = None
     access_token = None
+    token_expiry_str = None
 
     # 1. Check Google Sheets System_Config
     try:
         from services.sheets_db import SheetsDB
         refresh_token = SheetsDB.get_system_config('google_user_refresh_token')
         access_token = SheetsDB.get_system_config('google_user_access_token')
+        token_expiry_str = SheetsDB.get_system_config('google_user_token_expiry')
     except Exception as e:
         logger.debug(f"Could not read user tokens from System_Config: {e}")
 
@@ -105,27 +107,44 @@ def get_user_oauth_credentials():
 
     if client_id and client_secret and refresh_token:
         try:
+            expiry_dt = None
+            if token_expiry_str:
+                try:
+                    expiry_dt = datetime.datetime.strptime(token_expiry_str.strip(), '%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    expiry_dt = None
+
             creds = UserCredentials(
                 token=access_token,
                 refresh_token=refresh_token,
                 token_uri='https://oauth2.googleapis.com/token',
                 client_id=client_id,
                 client_secret=client_secret,
-                scopes=['https://www.googleapis.com/auth/drive']
+                scopes=['https://www.googleapis.com/auth/drive'],
+                expiry=expiry_dt
             )
-            # Verify or refresh if expired
-            if not creds.valid or not access_token:
-                creds.refresh(Request())
+            # Verify or refresh if expired or unvalidated (if expiry_dt is missing or in the past)
+            if not creds.valid or not access_token or expiry_dt is None or creds.expired:
                 try:
-                    from services.sheets_db import SheetsDB
-                    SheetsDB.set_system_config('google_user_access_token', creds.token, updated_by='oauth_auto_refresh')
-                    if creds.expiry:
-                        SheetsDB.set_system_config('google_user_token_expiry', creds.expiry.strftime('%Y-%m-%d %H:%M:%S'), updated_by='oauth_auto_refresh')
-                except Exception as save_err:
-                    logger.debug(f"Could not persist refreshed access token to Sheets: {save_err}")
+                    creds.refresh(Request())
+                    try:
+                        from services.sheets_db import SheetsDB
+                        SheetsDB.set_system_config('google_user_access_token', creds.token, updated_by='oauth_auto_refresh')
+                        if creds.expiry:
+                            SheetsDB.set_system_config('google_user_token_expiry', creds.expiry.strftime('%Y-%m-%d %H:%M:%S'), updated_by='oauth_auto_refresh')
+                    except Exception as save_err:
+                        logger.debug(f"Could not persist refreshed access token to Sheets: {save_err}")
+                except Exception as ref_err:
+                    err_msg = str(ref_err)
+                    logger.warning(f"Error refreshing UserCredentials: {err_msg}")
+                    if 'invalid_grant' in err_msg.lower() or 'expired or revoked' in err_msg.lower():
+                        logger.error("User OAuth token has expired or been revoked (invalid_grant). Reconnection required.")
+                    return None
+
             return creds
         except Exception as e:
-            logger.warning(f"Error building/refreshing UserCredentials: {e}")
+            logger.warning(f"Error building UserCredentials: {e}")
+            return None
 
     return None
 
@@ -176,20 +195,27 @@ def get_drive_status_diagnostic(folder_id=None):
     supporting both User OAuth (personal quota) and Service Account.
     """
     fid = folder_id or Config.GOOGLE_DRIVE_FOLDER_ID
+    
+    # 1. Check if user refresh token is stored in System_Config
+    stored_refresh_token = None
+    user_email = None
+    try:
+        from services.sheets_db import SheetsDB
+        stored_refresh_token = SheetsDB.get_system_config('google_user_refresh_token')
+        user_email = SheetsDB.get_system_config('google_user_email')
+    except Exception:
+        pass
+
     user_creds = get_user_oauth_credentials()
     sa_creds = get_google_credentials()
     sa_info = get_service_account_info()
     sa_email = sa_info.get('client_email') if sa_info else None
 
     client_id, client_secret = get_oauth_client_config()
-    user_email = None
-    try:
-        from services.sheets_db import SheetsDB
-        user_email = SheetsDB.get_system_config('google_user_email')
-    except Exception:
-        pass
 
     has_user_oauth = user_creds is not None
+    token_expired = bool(stored_refresh_token and not has_user_oauth)
+    reconnect_required = token_expired
     active_creds = user_creds if has_user_oauth else sa_creds
 
     drive_verified = False
@@ -209,19 +235,29 @@ def get_drive_status_diagnostic(folder_id=None):
         'is_shared_drive': False,
         'can_add_children': False,
         'can_upload_binary': False,
-        'drive_verified_success': drive_verified,
+        'drive_verified_success': drive_verified and not token_expired,
         'drive_last_verified_at': drive_verified_at,
-        'auth_mode': 'user_oauth' if has_user_oauth else 'service_account',
-        'active_account_email': user_email or ('Authorized User (OAuth)' if has_user_oauth else sa_email),
+        'auth_mode': 'user_oauth' if (has_user_oauth or token_expired) else 'service_account',
+        'active_account_email': user_email or ('Authorized User (OAuth)' if (has_user_oauth or token_expired) else sa_email),
         'service_account_email': sa_email,
         'client_id_configured': bool(client_id),
         'client_secret_configured': bool(client_secret),
-        'has_refresh_token': bool(has_user_oauth),
+        'has_refresh_token': bool(stored_refresh_token or has_user_oauth),
+        'token_expired': token_expired,
+        'reconnect_required': reconnect_required,
+        'needs_reauth': reconnect_required,
         'user_oauth_email': user_email,
         'storage_quota': None,
-        'status_code': 200,
+        'status_code': 401 if token_expired else 200,
         'message': ''
     }
+
+    if token_expired:
+        diag['message'] = (
+            f"Google Drive authorization for '{diag['active_account_email']}' has expired or was revoked (invalid_grant). "
+            f"Please click 'Reconnect Google Drive' to re-authorize personal Drive uploads."
+        )
+        return diag
 
     if not active_creds:
         diag['message'] = "No Google credentials configured."
@@ -309,9 +345,19 @@ def get_drive_status_diagnostic(folder_id=None):
             diag['status_code'] = resp.status_code
             diag['message'] = f"Drive API returned HTTP {resp.status_code}: {resp.text}"
     except Exception as e:
+        err_str = str(e)
         diag['has_folder_access'] = False
         diag['can_upload_binary'] = False
-        diag['message'] = f"Error checking Drive folder: {str(e)}"
+        if 'invalid_grant' in err_str.lower() or 'expired or revoked' in err_str.lower():
+            diag['token_expired'] = True
+            diag['reconnect_required'] = True
+            diag['status_code'] = 401
+            diag['message'] = (
+                f"Google Drive authorization has expired or was revoked (invalid_grant). "
+                f"Please click 'Reconnect Google Drive' to re-authorize personal Drive uploads."
+            )
+        else:
+            diag['message'] = f"Error checking Drive folder: {err_str}"
 
     return diag
 

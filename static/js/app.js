@@ -568,10 +568,15 @@ async function loadDriveStatus(isManual = false) {
 }
 
 function renderDriveOAuthPanel(drive) {
+    const isTokenExpired = Boolean(drive.token_expired || drive.reconnect_required);
+
     // Mode badge
     const modeBadge = document.getElementById('drive-auth-mode-badge');
     if (modeBadge) {
-        if (drive.auth_mode === 'user_oauth') {
+        if (isTokenExpired) {
+            modeBadge.className = 'badge badge-prio-urgent';
+            modeBadge.textContent = '⚠️ Token Expired / Revoked';
+        } else if (drive.auth_mode === 'user_oauth') {
             modeBadge.className = 'badge badge-status-resolved';
             modeBadge.textContent = '👤 User OAuth (Personal Quota)';
         } else if (drive.is_shared_drive) {
@@ -586,7 +591,10 @@ function renderDriveOAuthPanel(drive) {
     // Binary capability badge
     const binaryBadge = document.getElementById('drive-binary-badge');
     if (binaryBadge) {
-        if (drive.can_upload_binary && drive.drive_verified_success) {
+        if (isTokenExpired) {
+            binaryBadge.className = 'badge badge-prio-urgent';
+            binaryBadge.textContent = '⚠️ Uploads Blocked (Reauthorization Required)';
+        } else if (drive.can_upload_binary && drive.drive_verified_success) {
             binaryBadge.className = 'badge badge-status-resolved';
             binaryBadge.textContent = '✓ Direct Uploads Verified & Enabled';
         } else if (drive.auth_mode === 'user_oauth') {
@@ -601,7 +609,12 @@ function renderDriveOAuthPanel(drive) {
     // Status alert banner
     const alertEl = document.getElementById('drive-status-alert');
     if (alertEl) {
-        if (drive.can_upload_binary) {
+        if (isTokenExpired) {
+            alertEl.style.background = '#fef2f2';
+            alertEl.style.border = '1px solid #f87171';
+            alertEl.style.color = '#991b1b';
+            alertEl.innerHTML = `<strong>Google Drive Reauthorization Required:</strong> Your Google OAuth session for <b>${escapeHtml(drive.active_account_email || 'hr.ajitzone@gmail.com')}</b> has expired or was revoked (<code>invalid_grant</code>). Direct file uploads are paused until reauthorized.<br><button onclick="startGoogleOAuth()" class="btn btn-primary btn-sm" style="margin-top: 10px;">🔄 Reconnect Google Drive</button>`;
+        } else if (drive.can_upload_binary) {
             alertEl.style.background = '#f6ffed';
             alertEl.style.border = '1px solid #b7eb8f';
             alertEl.style.color = '#389e0d';
@@ -633,7 +646,10 @@ function renderDriveOAuthPanel(drive) {
     const quotaBar = document.getElementById('drive-diag-quota-bar');
     const quotaBox = document.querySelector('.quota-progress-container');
     if (quotaTextEl) {
-        if (drive.storage_quota && drive.storage_quota.limit_bytes) {
+        if (isTokenExpired) {
+            quotaTextEl.textContent = 'Token Expired — Quota inaccessible until re-authorized';
+            if (quotaBox) quotaBox.style.display = 'none';
+        } else if (drive.storage_quota && drive.storage_quota.limit_bytes) {
             const usageGb = drive.storage_quota.usage_gb || 0;
             const limitGb = drive.storage_quota.limit_gb || 15;
             const pct = Math.min(100, Math.round((usageGb / limitGb) * 100));
@@ -655,7 +671,9 @@ function renderDriveOAuthPanel(drive) {
     // Binary upload capability detail
     const uploadStatusEl = document.getElementById('drive-diag-upload-status');
     if (uploadStatusEl) {
-        if (drive.can_upload_binary && drive.drive_verified_success) {
+        if (isTokenExpired) {
+            uploadStatusEl.innerHTML = '<span style="color: #dc2626; font-weight: 600;">🔴 Token Expired (invalid_grant) — Click "Reconnect Google Drive"</span>';
+        } else if (drive.can_upload_binary && drive.drive_verified_success) {
             uploadStatusEl.innerHTML = '<span style="color: #059669; font-weight: 600;">🟢 Direct Upload Active & Verified (Saves to Drive Folder)</span>';
         } else if (drive.auth_mode === 'user_oauth') {
             uploadStatusEl.innerHTML = '<span style="color: #d97706; font-weight: 600;">🟡 OAuth Authorized — Pending Live Upload Verification Test</span>';
@@ -673,7 +691,9 @@ function renderDriveOAuthPanel(drive) {
     // Last verified probe
     const verifiedEl = document.getElementById('drive-diag-last-verified');
     if (verifiedEl) {
-        if (drive.drive_verified_success) {
+        if (isTokenExpired) {
+            verifiedEl.innerHTML = '<span style="color: #dc2626; font-weight: 600;">⚠️ Token Expired — Reauthorization Required</span>';
+        } else if (drive.drive_verified_success) {
             verifiedEl.innerHTML = `<span style="color: #059669; font-weight: 600;">🟢 Verified (${escapeHtml(drive.drive_last_verified_at || 'Recently')})</span>`;
         } else if (drive.auth_mode === 'user_oauth') {
             verifiedEl.innerHTML = '<span style="color: #d97706; font-weight: 600;">⏳ OAuth Authorized — Click "🧪 Test Live Upload" to verify write access</span>';
@@ -693,17 +713,19 @@ function renderDriveOAuthPanel(drive) {
     const disconnectBtn = document.getElementById('btn-drive-disconnect');
     const authBtn = document.getElementById('btn-drive-authorize');
     if (disconnectBtn) {
-        disconnectBtn.style.display = drive.auth_mode === 'user_oauth' ? 'inline-block' : 'none';
+        disconnectBtn.style.display = (drive.auth_mode === 'user_oauth' && !isTokenExpired) ? 'inline-block' : 'none';
     }
     if (authBtn) {
-        authBtn.textContent = drive.auth_mode === 'user_oauth' ? '🔄 Re-Authorize Google Drive' : '🔑 Authorize with Google';
+        authBtn.textContent = isTokenExpired ? '🔄 Reconnect Google Drive' : (drive.auth_mode === 'user_oauth' ? '🔄 Re-Authorize Google Drive' : '🔑 Authorize with Google');
     }
 }
 
 function updateUploadNotice(canUpload, drive = null) {
     const noticeEl = document.getElementById('lodge-upload-quota-notice');
     if (!noticeEl) return;
-    if (canUpload) {
+    if (drive && (drive.token_expired || drive.reconnect_required)) {
+        noticeEl.innerHTML = `<span style="color: #dc2626; font-weight: 500;">⚠️ Google Drive authorization has expired. <a href="#settings" style="text-decoration: underline; color: #dc2626; font-weight: 600;">Reconnect Google Drive in Settings</a> to enable direct uploads. Alternatively, paste a share link in the field above.</span>`;
+    } else if (canUpload) {
         const email = drive?.active_account_email ? ` (${drive.active_account_email})` : '';
         noticeEl.innerHTML = `<span style="color: #059669; font-weight: 500;">✓ Direct Google Drive upload active${email}. Files save to target folder.</span>`;
     } else {
