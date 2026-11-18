@@ -1,6 +1,7 @@
 import os
 import io
 import time
+import json
 import secrets
 import urllib.parse
 import datetime
@@ -1318,6 +1319,163 @@ def toggle_user_status(user_id):
     except Exception as e:
         logger.error(f"Error updating status for user '{user_id}': {e}")
         return jsonify({'status': 'error', 'message': f"Failed to change user status: {str(e)}"}), 500
+
+@app.route('/api/users/<user_id>/usage', methods=['GET'])
+@admin_required
+def get_user_usage_endpoint(user_id):
+    """
+    Returns activity usage analysis for a user before deletion:
+    - Complaints lodged
+    - Complaints handled/assigned
+    - Comments & history log entries
+    """
+    db = get_db()
+    usage_info = db.get_user_usage(user_id) if hasattr(db, 'get_user_usage') else None
+    if not usage_info:
+        user = db.find_user_by_id(user_id)
+        if not user:
+            return jsonify({'status': 'error', 'message': f"User '{user_id}' not found."}), 404
+        usage_info = {
+            'user': user,
+            'lodged_complaints_count': 0,
+            'handled_complaints_count': 0,
+            'comments_count': 0,
+            'history_count': 0,
+            'total_activity_count': 0
+        }
+    safe_user = dict(usage_info['user'])
+    safe_user.pop('Password Hash', None)
+    return jsonify({
+        'status': 'success',
+        'user': safe_user,
+        'usage': {
+            'lodged_complaints_count': usage_info['lodged_complaints_count'],
+            'handled_complaints_count': usage_info['handled_complaints_count'],
+            'comments_count': usage_info['comments_count'],
+            'history_count': usage_info['history_count'],
+            'total_activity_count': usage_info['total_activity_count']
+        }
+    })
+
+@app.route('/api/users/<user_id>', methods=['DELETE'])
+@app.route('/api/users/<user_id>/delete', methods=['POST'])
+@admin_required
+def delete_user_endpoint(user_id):
+    """
+    Deletes or archives an existing user account.
+    - Soft Delete: Marks account as 'ARCHIVED' (preserves row in Users sheet, immediately blocks login).
+      Allowed for Admin and Super Admin. Admins cannot archive Super Admins.
+    - Permanent Delete: Removes user row from Users worksheet.
+      Allowed ONLY for Super Admin after explicit confirmation.
+    - Self-deletion is strictly blocked (Users cannot delete their own account).
+    - Cannot delete or archive the sole active Super Admin account.
+    - Preserves all business records (complaints, comments, assignments, status history).
+    - Records audit log entry with actor, timestamp, action, and reason.
+    """
+    current_user = get_current_user()
+    db = get_db()
+    target_user = db.find_user_by_id(user_id)
+    if not target_user:
+        return jsonify({'status': 'error', 'message': f"User '{user_id}' not found."}), 404
+
+    data = request.get_json(silent=True) or request.form or {}
+    action = (data.get('action') or data.get('delete_type') or 'soft').strip().lower()
+    reason = (data.get('reason') or '').strip()
+    confirm = (data.get('confirm') or '').strip()
+
+    if not reason:
+        return jsonify({'status': 'error', 'message': 'A valid reason for deletion/archival is required for the audit log.'}), 400
+
+    # Self-deletion guard
+    curr_id = str(current_user.get('user_id', '')).strip()
+    curr_email = str(current_user.get('email', '')).strip().lower()
+    targ_id = str(target_user.get('User ID', '')).strip()
+    targ_email = str(target_user.get('Email', '')).strip().lower()
+
+    if curr_id == targ_id or (curr_email and curr_email == targ_email):
+        return jsonify({'status': 'error', 'message': 'You cannot delete or archive your own logged-in account.'}), 400
+
+    # Super Admin protection
+    is_current_super = current_user.get('role') == 'Super Admin'
+    target_is_super = target_user.get('Role') == 'Super Admin'
+
+    if target_is_super and not is_current_super:
+        return jsonify({'status': 'error', 'message': 'Access forbidden: Only Super Admins can delete or archive a Super Admin account.'}), 403
+
+    # Last active Super Admin guard
+    if target_is_super and str(target_user.get('Is Active', '')).upper() == 'TRUE':
+        active_supers = db.count_active_super_admins() if hasattr(db, 'count_active_super_admins') else 1
+        if active_supers <= 1:
+            return jsonify({'status': 'error', 'message': 'Cannot delete or archive the system’s sole active Super Admin.'}), 400
+
+    # Action validations
+    if action == 'permanent':
+        if not is_current_super:
+            return jsonify({'status': 'error', 'message': 'Access forbidden: Permanent account deletion is strictly restricted to Super Admins.'}), 403
+        if confirm.upper() != 'DELETE':
+            return jsonify({'status': 'error', 'message': 'Permanent deletion requires typing DELETE in the confirmation box.'}), 400
+    elif action not in ('soft', 'archive'):
+        return jsonify({'status': 'error', 'message': f"Invalid action '{action}'. Allowed actions: 'soft', 'permanent'."}), 400
+
+    try:
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        now_str = now_dt.strftime('%Y-%m-%d %H:%M:%S')
+        now_iso = now_dt.isoformat()
+
+        if action == 'permanent':
+            db.delete_user(user_id)
+            audit_action = 'USER_PERMANENTLY_DELETED'
+            audit_msg = f"Permanently deleted user '{target_user.get('Full Name')}' ({user_id}, {target_user.get('Email')}). Reason: {reason}"
+            success_msg = f"User '{target_user.get('Full Name')}' has been permanently deleted. Historical complaint records remain preserved."
+        else:
+            db.update_user(user_id=user_id, is_active='ARCHIVED')
+            audit_action = 'USER_ARCHIVED'
+            audit_msg = f"Archived user '{target_user.get('Full Name')}' ({user_id}, {target_user.get('Email')}). Reason: {reason}"
+            success_msg = f"User '{target_user.get('Full Name')}' has been archived. Login is disabled and records remain preserved."
+
+        # Write audit trail to Status History
+        try:
+            if hasattr(db, 'add_status_history'):
+                db.add_status_history(
+                    complaint_id=f"USER:{user_id}",
+                    old_status=str(target_user.get('Is Active', 'TRUE')),
+                    new_status='ARCHIVED' if action == 'soft' else 'DELETED',
+                    changed_by_name=current_user.get('name', 'Admin'),
+                    changed_by_email=current_user.get('email', ''),
+                    remarks=audit_msg
+                )
+        except Exception as audit_err:
+            logger.warning(f"Could not record user status history: {audit_err}")
+
+        # Write audit trail to System_Config
+        try:
+            if hasattr(db, 'set_system_config'):
+                audit_key = f"AUDIT_USER_{action.upper()}_{user_id}_{int(time.time())}"
+                audit_payload = {
+                    'action': audit_action,
+                    'target_user_id': user_id,
+                    'target_name': target_user.get('Full Name'),
+                    'target_email': target_user.get('Email'),
+                    'target_role': target_user.get('Role'),
+                    'actor_email': current_user.get('email'),
+                    'actor_name': current_user.get('name'),
+                    'reason': reason,
+                    'timestamp': now_iso
+                }
+                db.set_system_config(audit_key, json.dumps(audit_payload), updated_by=current_user.get('email', 'system'))
+        except Exception as config_err:
+            logger.warning(f"Could not record user audit config: {config_err}")
+
+        return jsonify({
+            'status': 'success',
+            'action': action,
+            'message': success_msg
+        })
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 400
+    except Exception as e:
+        logger.error(f"Error executing user deletion '{user_id}': {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to execute user deletion: {str(e)}"}), 500
 
 # =============================================================================
 # REPORTS & ANALYTICS APIS

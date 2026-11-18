@@ -186,7 +186,13 @@ class MockSheetsDB:
         if department is not None:
             user['Department'] = department.strip() or 'General'
         if is_active is not None:
-            user['Is Active'] = 'TRUE' if str(is_active).upper() in ('TRUE', '1', 'YES') else 'FALSE'
+            val_upper = str(is_active).strip().upper()
+            if val_upper in ('ARCHIVED', 'ARCHIVE'):
+                user['Is Active'] = 'ARCHIVED'
+            elif val_upper in ('TRUE', '1', 'YES'):
+                user['Is Active'] = 'TRUE'
+            else:
+                user['Is Active'] = 'FALSE'
         if new_password and str(new_password).strip():
             if len(str(new_password).strip()) < 6:
                 raise ValueError("Password must be at least 6 characters.")
@@ -201,6 +207,63 @@ class MockSheetsDB:
         safe = dict(user)
         safe.pop('Password Hash', None)
         return safe
+
+    @classmethod
+    def get_user_usage(cls, user_id_or_email):
+        user = cls.find_user_by_id(user_id_or_email) or cls.find_user_by_email(user_id_or_email)
+        if not user:
+            return None
+
+        user_email = (user.get('Email') or '').lower().strip()
+        user_name = (user.get('Full Name') or '').strip().lower()
+
+        lodged_count = 0
+        handled_count = 0
+        for c in cls._store.get('Complaints', []):
+            comp_email = (c.get('Complainant Email') or '').lower().strip()
+            comp_name = (c.get('Employee Name') or c.get('Complainant Name') or '').strip().lower()
+            handled_by = (c.get('Handled By') or '').lower().strip()
+
+            if user_email and comp_email == user_email:
+                lodged_count += 1
+            elif user_name and comp_name == user_name:
+                lodged_count += 1
+
+            if user_email and user_email in handled_by:
+                handled_count += 1
+            elif user_name and user_name in handled_by:
+                handled_count += 1
+
+        comment_count = 0
+        for com in cls._store.get('Assignments and Comments', []):
+            author_email = (com.get('Author Email') or '').lower().strip()
+            author_name = (com.get('Author Name') or '').strip().lower()
+            if (user_email and author_email == user_email) or (user_name and author_name == user_name):
+                comment_count += 1
+
+        history_count = 0
+        for h in cls._store.get('Status History', []):
+            changed_email = (h.get('Changed By Email') or '').lower().strip()
+            changed_name = (h.get('Changed By Name') or '').strip().lower()
+            if (user_email and changed_email == user_email) or (user_name and changed_name == user_name):
+                history_count += 1
+
+        return {
+            'user': user,
+            'lodged_complaints_count': lodged_count,
+            'handled_complaints_count': handled_count,
+            'comments_count': comment_count,
+            'history_count': history_count,
+            'total_activity_count': lodged_count + handled_count + comment_count + history_count
+        }
+
+    @classmethod
+    def delete_user(cls, user_id):
+        for i, u in enumerate(cls._store.get('Users', [])):
+            if u.get('User ID', '').strip() == str(user_id).strip():
+                del cls._store['Users'][i]
+                return True
+        raise ValueError(f"User '{user_id}' not found.")
 
     @classmethod
     def get_all_departments(cls, include_inactive=False):

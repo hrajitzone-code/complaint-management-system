@@ -400,7 +400,13 @@ class SheetsDB:
                 current_row[dept_idx] = sanitize_cell_value(department.strip() or 'General')
 
             if is_active is not None:
-                current_row[active_idx] = 'TRUE' if str(is_active).upper() in ('TRUE', '1', 'YES') else 'FALSE'
+                val_upper = str(is_active).strip().upper()
+                if val_upper in ('ARCHIVED', 'ARCHIVE'):
+                    current_row[active_idx] = 'ARCHIVED'
+                elif val_upper in ('TRUE', '1', 'YES'):
+                    current_row[active_idx] = 'TRUE'
+                else:
+                    current_row[active_idx] = 'FALSE'
 
             if new_password and str(new_password).strip():
                 if len(str(new_password).strip()) < 6:
@@ -450,6 +456,94 @@ class SheetsDB:
                 cls._invalidate_cache('Complaints')
         except Exception as e:
             logger.warning(f"Could not cascade email change in complaints: {e}")
+
+    @classmethod
+    def get_user_usage(cls, user_id_or_email):
+        """
+        Analyzes dependencies for a user before deletion or archival:
+        - Complaints lodged by user
+        - Complaints handled/assigned to user
+        - Comments and history entries authored by user
+        """
+        user = cls.find_user_by_id(user_id_or_email) or cls.find_user_by_email(user_id_or_email)
+        if not user:
+            return None
+
+        user_email = (user.get('Email') or '').lower().strip()
+        user_name = (user.get('Full Name') or '').strip().lower()
+
+        complaints = cls._read_records('Complaints', use_cache=True)
+        lodged_count = 0
+        handled_count = 0
+
+        for c in complaints:
+            comp_email = (c.get('Complainant Email') or '').lower().strip()
+            comp_name = (c.get('Employee Name') or c.get('Complainant Name') or '').strip().lower()
+            handled_by = (c.get('Handled By') or '').lower().strip()
+
+            if user_email and comp_email == user_email:
+                lodged_count += 1
+            elif user_name and comp_name == user_name:
+                lodged_count += 1
+
+            if user_email and user_email in handled_by:
+                handled_count += 1
+            elif user_name and user_name in handled_by:
+                handled_count += 1
+
+        comments = cls._read_records('Assignments and Comments', use_cache=True)
+        comment_count = 0
+        for com in comments:
+            author_email = (com.get('Author Email') or '').lower().strip()
+            author_name = (com.get('Author Name') or '').strip().lower()
+            if (user_email and author_email == user_email) or (user_name and author_name == user_name):
+                comment_count += 1
+
+        history = cls._read_records('Status History', use_cache=True)
+        history_count = 0
+        for h in history:
+            changed_email = (h.get('Changed By Email') or '').lower().strip()
+            changed_name = (h.get('Changed By Name') or '').strip().lower()
+            if (user_email and changed_email == user_email) or (user_name and changed_name == user_name):
+                history_count += 1
+
+        return {
+            'user': user,
+            'lodged_complaints_count': lodged_count,
+            'handled_complaints_count': handled_count,
+            'comments_count': comment_count,
+            'history_count': history_count,
+            'total_activity_count': lodged_count + handled_count + comment_count + history_count
+        }
+
+    @classmethod
+    def delete_user(cls, user_id):
+        """
+        Permanently deletes a user record from the Google Sheets Users worksheet.
+        NEVER touches, deletes, or cascade-deletes Complaints, Comments, or History.
+        """
+        with cls._db_lock:
+            ws = cls._get_worksheet('Users')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            if not rows or len(rows) < 2:
+                raise ValueError(f"User '{user_id}' not found.")
+
+            headers = [h.strip() for h in rows[0]]
+            id_idx = headers.index('User ID') if 'User ID' in headers else 0
+
+            found_row = None
+            for r_idx, r in enumerate(rows[1:], start=2):
+                curr_id = r[id_idx].strip() if len(r) > id_idx else ''
+                if curr_id == str(user_id).strip():
+                    found_row = r_idx
+                    break
+
+            if not found_row:
+                raise ValueError(f"User '{user_id}' not found.")
+
+            execute_with_retry(lambda: ws.delete_rows(found_row))
+            cls._invalidate_cache('Users')
+            return True
 
     # =========================================================================
     # DEPARTMENT OPERATIONS

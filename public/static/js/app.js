@@ -144,6 +144,7 @@ function setupEventListeners() {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
                 if (modal.id === 'edit-user-modal') closeEditUserModal();
+                else if (modal.id === 'delete-user-modal') closeDeleteUserModal();
                 else if (modal.id === 'create-user-modal') closeCreateUserModal();
                 else if (modal.id === 'complaint-detail-modal') closeComplaintModal();
                 else if (modal.id === 'edit-complaint-modal') closeEditComplaintModal();
@@ -163,6 +164,11 @@ function setupEventListeners() {
             const editUserModal = document.getElementById('edit-user-modal');
             if (editUserModal && editUserModal.style.display && editUserModal.style.display !== 'none') {
                 closeEditUserModal();
+                return;
+            }
+            const deleteUserModal = document.getElementById('delete-user-modal');
+            if (deleteUserModal && deleteUserModal.style.display && deleteUserModal.style.display !== 'none') {
+                closeDeleteUserModal();
                 return;
             }
             const createUserModal = document.getElementById('create-user-modal');
@@ -1898,48 +1904,104 @@ async function loadAdminUsers() {
     try {
         const res = await fetch('/api/users');
         const data = await res.json();
-        const tbody = document.getElementById('settings-users-table');
         if (res.ok && data.users) {
             currentUsersList = data.users;
-            const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
-            const isAdmin = currentUser && (currentUser.role === 'Admin' || isSuperAdmin);
-
-            tbody.innerHTML = data.users.map(u => {
-                const isActive = String(u['Is Active'] || 'TRUE').toUpperCase() === 'TRUE';
-                const isTargetSuper = u.Role === 'Super Admin';
-                const canEdit = isSuperAdmin || (isAdmin && !isTargetSuper);
-                const roleBadgeClass = u.Role === 'Super Admin'
-                    ? 'badge-status-in-progress'
-                    : u.Role === 'Admin'
-                    ? 'badge-prio-high'
-                    : u.Role === 'Support Staff'
-                    ? 'badge-info'
-                    : 'badge-prio-low';
-
-                return `
-                    <tr>
-                        <td><code>${escapeHtml(u['User ID'])}</code></td>
-                        <td><strong>${escapeHtml(u['Full Name'])}</strong></td>
-                        <td>${escapeHtml(u.Email)}</td>
-                        <td><span class="badge ${roleBadgeClass}">${escapeHtml(u.Role)}</span></td>
-                        <td>${escapeHtml(u.Department || 'General')}</td>
-                        <td><span class="badge ${isActive ? 'badge-active' : 'badge-inactive'}">${isActive ? 'Active' : 'Inactive'}</span></td>
-                        <td>
-                            ${canEdit ? `
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="openEditUserModal('${escapeHtml(u['User ID'])}')">
-                                    Edit
-                                </button>
-                            ` : `
-                                <span class="text-muted text-sm" title="Super Admin accounts can only be edited by Super Admins">Protected</span>
-                            `}
-                        </td>
-                    </tr>
-                `;
-            }).join('');
+            renderUsersTable();
+        } else {
+            const tbody = document.getElementById('settings-users-table');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-danger">Failed to load users.</td></tr>';
         }
     } catch (e) {
         console.error("Failed to load users:", e);
+        const tbody = document.getElementById('settings-users-table');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-danger">Error loading users.</td></tr>';
     }
+}
+
+function renderUsersTable() {
+    const tbody = document.getElementById('settings-users-table');
+    if (!tbody) return;
+    if (!currentUsersList || currentUsersList.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">No users found.</td></tr>';
+        return;
+    }
+
+    const filterVal = document.getElementById('users-status-filter')?.value || 'ALL';
+    const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
+    const isAdmin = currentUser && (currentUser.role === 'Admin' || isSuperAdmin);
+
+    const filteredUsers = currentUsersList.filter(u => {
+        const rawStatus = String(u['Is Active'] || 'TRUE').toUpperCase();
+        if (filterVal === 'ACTIVE') return rawStatus === 'TRUE';
+        if (filterVal === 'INACTIVE') return rawStatus === 'FALSE';
+        if (filterVal === 'ARCHIVED') return rawStatus === 'ARCHIVED';
+        return true;
+    });
+
+    if (filteredUsers.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-muted">No ${escapeHtml(filterVal.toLowerCase())} users found.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = filteredUsers.map(u => {
+        const rawStatus = String(u['Is Active'] || 'TRUE').toUpperCase();
+        const isTargetSuper = u.Role === 'Super Admin';
+        const isSelf = currentUser && (currentUser.user_id === u['User ID'] || currentUser.email === u.Email);
+        const canEdit = isSuperAdmin || (isAdmin && !isTargetSuper);
+        const canDelete = isSuperAdmin || (isAdmin && !isTargetSuper);
+
+        let statusBadge = '';
+        if (rawStatus === 'TRUE') {
+            statusBadge = '<span class="badge badge-active">Active</span>';
+        } else if (rawStatus === 'ARCHIVED') {
+            statusBadge = '<span class="badge" style="background: #e2e8f0; color: #475569; border: 1px solid #cbd5e1;">Archived</span>';
+        } else {
+            statusBadge = '<span class="badge badge-inactive">Inactive</span>';
+        }
+
+        const roleBadgeClass = u.Role === 'Super Admin'
+            ? 'badge-status-in-progress'
+            : u.Role === 'Admin'
+            ? 'badge-prio-high'
+            : u.Role === 'Support Staff'
+            ? 'badge-info'
+            : 'badge-prio-low';
+
+        return `
+            <tr>
+                <td><code>${escapeHtml(u['User ID'])}</code></td>
+                <td><strong>${escapeHtml(u['Full Name'])}</strong></td>
+                <td>${escapeHtml(u.Email)}</td>
+                <td><span class="badge ${roleBadgeClass}">${escapeHtml(u.Role)}</span></td>
+                <td>${escapeHtml(u.Department || 'General')}</td>
+                <td>${statusBadge}</td>
+                <td>
+                    <div class="table-row-actions" style="display: flex; gap: 6px; align-items: center;">
+                        ${canEdit ? `
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="openEditUserModal('${escapeHtml(u['User ID'])}')">
+                                Edit
+                            </button>
+                        ` : `
+                            <span class="text-muted text-sm" title="Super Admin accounts can only be edited by Super Admins">Protected</span>
+                        `}
+                        ${isSelf ? `
+                            <button type="button" class="btn btn-outline-secondary btn-sm" disabled title="You cannot delete your own logged-in account">
+                                Delete
+                            </button>
+                        ` : canDelete ? `
+                            <button type="button" class="btn btn-outline-danger btn-sm" onclick="openDeleteUserModal('${escapeHtml(u['User ID'])}')">
+                                Delete
+                            </button>
+                        ` : `
+                            <button type="button" class="btn btn-outline-secondary btn-sm" disabled title="Super Admin accounts can only be deleted by Super Admins">
+                                Delete
+                            </button>
+                        `}
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
 }
 
 function syncBodyModalOpen() {
@@ -2135,6 +2197,170 @@ async function submitEditUser(e) {
     } catch (err) {
         console.error("Error updating user:", err);
         showToast("Network error updating user.", "error");
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
+    }
+}
+
+let activeDeleteUser = null;
+
+async function openDeleteUserModal(userId) {
+    const user = currentUsersList.find(u => u['User ID'] === userId);
+    if (!user) {
+        showToast("User details not found.", "error");
+        return;
+    }
+
+    const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
+    const isTargetSuper = user.Role === 'Super Admin';
+    const isSelf = currentUser && (currentUser.user_id === user['User ID'] || currentUser.email === user.Email);
+
+    if (isSelf) {
+        showToast("You cannot delete your own logged-in account.", "error");
+        return;
+    }
+
+    if (isTargetSuper && !isSuperAdmin) {
+        showToast("Access forbidden: Super Admin accounts can only be deleted by Super Admins.", "error");
+        return;
+    }
+
+    activeDeleteUser = user;
+
+    document.getElementById('delete-user-id').value = user['User ID'];
+    document.getElementById('delete-user-name-display').textContent = user['Full Name'] || '-';
+    document.getElementById('delete-user-id-display').textContent = user['User ID'];
+    document.getElementById('delete-user-email-display').textContent = user.Email || '-';
+    document.getElementById('delete-user-role-display').textContent = user.Role || '-';
+    document.getElementById('delete-user-dept-display').textContent = user.Department || 'General';
+
+    const rawStatus = String(user['Is Active'] || 'TRUE').toUpperCase();
+    document.getElementById('delete-user-status-display').textContent = rawStatus === 'TRUE' ? 'Active' : (rawStatus === 'ARCHIVED' ? 'Archived' : 'Inactive');
+
+    document.getElementById('delete-user-reason').value = '';
+    document.getElementById('delete-user-confirm-input').value = '';
+    document.getElementById('delete-type-soft').checked = true;
+
+    // Enable/disable Permanent Delete option based on role
+    const permRadio = document.getElementById('delete-type-permanent');
+    const permLabel = document.getElementById('delete-type-perm-label');
+    if (!isSuperAdmin) {
+        permRadio.disabled = true;
+        permLabel.style.opacity = '0.5';
+        permLabel.style.cursor = 'not-allowed';
+        permLabel.title = "Permanent deletion is restricted to Super Admins.";
+    } else {
+        permRadio.disabled = false;
+        permLabel.style.opacity = '1';
+        permLabel.style.cursor = 'pointer';
+        permLabel.title = "";
+    }
+
+    toggleDeleteTypeUI();
+
+    const modal = document.getElementById('delete-user-modal');
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    const modalBody = modal.querySelector('.modal-body');
+    if (modalBody) {
+        modalBody.scrollTop = 0;
+    }
+
+    // Fetch live usage analysis
+    const usageBox = document.getElementById('delete-user-usage-box');
+    const usageLoading = document.getElementById('delete-user-usage-loading');
+    usageBox.style.display = 'none';
+    usageLoading.style.display = 'block';
+
+    try {
+        const res = await fetch(`/api/users/${encodeURIComponent(userId)}/usage`);
+        const data = await res.json();
+        usageLoading.style.display = 'none';
+        if (res.ok && data.usage) {
+            document.getElementById('delete-user-lodged-count').textContent = data.usage.lodged_complaints_count || 0;
+            document.getElementById('delete-user-handled-count').textContent = data.usage.handled_complaints_count || 0;
+            document.getElementById('delete-user-comments-count').textContent = (data.usage.comments_count || 0) + (data.usage.history_count || 0);
+            usageBox.style.display = 'block';
+        }
+    } catch (e) {
+        usageLoading.style.display = 'none';
+    }
+}
+
+function closeDeleteUserModal() {
+    const modal = document.getElementById('delete-user-modal');
+    if (modal) modal.style.display = 'none';
+    activeDeleteUser = null;
+    syncBodyModalOpen();
+}
+
+function toggleDeleteTypeUI() {
+    const isPermanent = document.getElementById('delete-type-permanent')?.checked;
+    const confirmBox = document.getElementById('delete-user-confirm-box');
+    const submitBtn = document.getElementById('delete-user-submit-btn');
+
+    if (isPermanent) {
+        if (confirmBox) confirmBox.style.display = 'block';
+        if (submitBtn) {
+            submitBtn.textContent = 'Permanently Delete User';
+            submitBtn.className = 'btn btn-danger';
+        }
+    } else {
+        if (confirmBox) confirmBox.style.display = 'none';
+        if (submitBtn) {
+            submitBtn.textContent = 'Archive User';
+            submitBtn.className = 'btn btn-warning';
+        }
+    }
+}
+
+async function submitDeleteUser(e) {
+    e.preventDefault();
+    if (!activeDeleteUser) return;
+
+    const userId = document.getElementById('delete-user-id').value.trim();
+    const action = document.querySelector('input[name="delete_type"]:checked')?.value || 'soft';
+    const reason = document.getElementById('delete-user-reason').value.trim();
+    const confirmText = document.getElementById('delete-user-confirm-input').value.trim();
+
+    if (!reason) {
+        showToast("Please provide a reason for the action.", "error");
+        return;
+    }
+
+    if (action === 'permanent' && confirmText.toUpperCase() !== 'DELETE') {
+        showToast("Please type DELETE in the confirmation box to permanently delete this user.", "error");
+        return;
+    }
+
+    const submitBtn = document.getElementById('delete-user-submit-btn');
+    const originalText = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.textContent = action === 'permanent' ? 'Deleting...' : 'Archiving...';
+
+    try {
+        const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: action,
+                reason: reason,
+                confirm: confirmText
+            })
+        });
+        const data = await res.json();
+
+        if (res.ok && data.status === 'success') {
+            showToast(data.message || "User operation completed successfully.", "success");
+            closeDeleteUserModal();
+            await loadAdminUsers();
+        } else {
+            showToast(data.message || "Failed to process user deletion.", "error");
+        }
+    } catch (err) {
+        console.error("Error executing user deletion:", err);
+        showToast("Network error executing user deletion.", "error");
     } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = originalText;

@@ -12,9 +12,9 @@ def login_required(f):
         u = get_current_user()
         if not u:
             return jsonify({'status': 'error', 'message': 'Authentication required. Please login.'}), 401
-        if str(u.get('is_active', 'TRUE')).upper() == 'FALSE':
+        if str(u.get('is_active', 'TRUE')).upper() in ('FALSE', 'ARCHIVED'):
             session.clear()
-            return jsonify({'status': 'error', 'message': 'Account is disabled. Please contact your administrator.'}), 403
+            return jsonify({'status': 'error', 'message': 'Account is disabled or archived. Please contact your administrator.'}), 403
         return f(*args, **kwargs)
     return decorated
 
@@ -24,9 +24,9 @@ def staff_required(f):
         u = get_current_user()
         if not u:
             return jsonify({'status': 'error', 'message': 'Authentication required. Please login.'}), 401
-        if str(u.get('is_active', 'TRUE')).upper() == 'FALSE':
+        if str(u.get('is_active', 'TRUE')).upper() in ('FALSE', 'ARCHIVED'):
             session.clear()
-            return jsonify({'status': 'error', 'message': 'Account is disabled. Please contact your administrator.'}), 403
+            return jsonify({'status': 'error', 'message': 'Account is disabled or archived. Please contact your administrator.'}), 403
         if u.get('role') not in ('Super Admin', 'Admin', 'Support Staff'):
             return jsonify({'status': 'error', 'message': 'Access forbidden. Staff or Admin privileges required.'}), 403
         return f(*args, **kwargs)
@@ -38,9 +38,9 @@ def admin_required(f):
         u = get_current_user()
         if not u:
             return jsonify({'status': 'error', 'message': 'Authentication required. Please login.'}), 401
-        if str(u.get('is_active', 'TRUE')).upper() == 'FALSE':
+        if str(u.get('is_active', 'TRUE')).upper() in ('FALSE', 'ARCHIVED'):
             session.clear()
-            return jsonify({'status': 'error', 'message': 'Account is disabled. Please contact your administrator.'}), 403
+            return jsonify({'status': 'error', 'message': 'Account is disabled or archived. Please contact your administrator.'}), 403
         if u.get('role') not in ('Super Admin', 'Admin'):
             return jsonify({'status': 'error', 'message': 'Access forbidden. Administrator privileges required.'}), 403
         return f(*args, **kwargs)
@@ -52,9 +52,9 @@ def super_admin_required(f):
         u = get_current_user()
         if not u:
             return jsonify({'status': 'error', 'message': 'Authentication required. Please login.'}), 401
-        if str(u.get('is_active', 'TRUE')).upper() == 'FALSE':
+        if str(u.get('is_active', 'TRUE')).upper() in ('FALSE', 'ARCHIVED'):
             session.clear()
-            return jsonify({'status': 'error', 'message': 'Account is disabled. Please contact your administrator.'}), 403
+            return jsonify({'status': 'error', 'message': 'Account is disabled or archived. Please contact your administrator.'}), 403
         if u.get('role') != 'Super Admin':
             return jsonify({'status': 'error', 'message': 'Access forbidden. Super Administrator privileges required.'}), 403
         return f(*args, **kwargs)
@@ -75,6 +75,8 @@ def verify_and_login_user(email, password, db_engine):
         return False, None, "Invalid email or password."
 
     if str(user_record.get('Is Active', '')).upper() != 'TRUE':
+        if str(user_record.get('Is Active', '')).upper() == 'ARCHIVED':
+            return False, None, "Account has been archived. Please contact your administrator."
         return False, None, "Account is disabled. Please contact your administrator."
 
     stored_hash = user_record.get('Password Hash', '')

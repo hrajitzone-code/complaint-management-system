@@ -699,9 +699,18 @@
                     <div class="grid-2">
                         <!-- User Management -->
                         <div class="panel-card">
-                            <div class="panel-header">
+                            <div class="panel-header" style="flex-wrap: wrap; gap: 10px;">
                                 <h3>Users & Staff</h3>
-                                <button class="btn btn-primary btn-sm" onclick="openCreateUserModal()">+ Add User</button>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <label for="users-status-filter" style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">Status:</label>
+                                    <select id="users-status-filter" class="form-control" style="width: auto; padding: 4px 10px; font-size: 0.85rem;" onchange="renderUsersTable()">
+                                        <option value="ALL" selected>All Users</option>
+                                        <option value="ACTIVE">Active</option>
+                                        <option value="INACTIVE">Inactive</option>
+                                        <option value="ARCHIVED">Archived</option>
+                                    </select>
+                                    <button class="btn btn-primary btn-sm" onclick="openCreateUserModal()">+ Add User</button>
+                                </div>
                             </div>
                             <div class="table-responsive">
                                 <table class="data-table">
@@ -1652,6 +1661,108 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" onclick="closeEditUserModal()">Cancel</button>
                     <button type="submit" class="btn btn-primary" id="edit-user-submit-btn">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- DELETE USER CONFIRMATION & ARCHIVAL MODAL -->
+    <div id="delete-user-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="delete-user-title">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3 id="delete-user-title" style="color: #ef4444;">Delete / Archive User</h3>
+                <button type="button" class="btn-close" onclick="closeDeleteUserModal()" aria-label="Close modal">&times;</button>
+            </div>
+            <form class="modal-form" onsubmit="submitDeleteUser(event)">
+                <input type="hidden" id="delete-user-id">
+                <div class="modal-body">
+                    <!-- User Details Summary -->
+                    <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <strong id="delete-user-name-display" style="font-size: 1.05rem;">-</strong>
+                            <code id="delete-user-id-display" style="font-size: 0.85rem; font-weight: 600;">-</code>
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                            <div>Email: <span id="delete-user-email-display" style="color: var(--text-main); font-weight: 500;">-</span></div>
+                            <div>Role: <span id="delete-user-role-display" style="color: var(--text-main); font-weight: 500;">-</span></div>
+                            <div>Department: <span id="delete-user-dept-display" style="color: var(--text-main); font-weight: 500;">-</span></div>
+                            <div>Status: <span id="delete-user-status-display" style="color: var(--text-main); font-weight: 500;">-</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Usage / Dependency Analysis -->
+                    <div id="delete-user-usage-loading" class="text-muted" style="padding: 10px 0; text-align: center; font-size: 0.88rem;">
+                        Analyzing user complaint activity and dependencies...
+                    </div>
+                    <div id="delete-user-usage-box" style="display: none; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 16px; font-size: 0.88rem; color: #1e40af;">
+                        <div style="font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                            <span>Activity Impact Analysis:</span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; margin: 8px 0;">
+                            <div style="background: #fff; padding: 6px; border-radius: 4px; border: 1px solid #dbeafe;">
+                                <div style="font-size: 1.1rem; font-weight: 700; color: #1d4ed8;" id="delete-user-lodged-count">0</div>
+                                <div style="font-size: 0.75rem; color: #64748b;">Complaints Lodged</div>
+                            </div>
+                            <div style="background: #fff; padding: 6px; border-radius: 4px; border: 1px solid #dbeafe;">
+                                <div style="font-size: 1.1rem; font-weight: 700; color: #1d4ed8;" id="delete-user-handled-count">0</div>
+                                <div style="font-size: 0.75rem; color: #64748b;">Handled / Assigned</div>
+                            </div>
+                            <div style="background: #fff; padding: 6px; border-radius: 4px; border: 1px solid #dbeafe;">
+                                <div style="font-size: 1.1rem; font-weight: 700; color: #1d4ed8;" id="delete-user-comments-count">0</div>
+                                <div style="font-size: 0.75rem; color: #64748b;">Comments / Logs</div>
+                            </div>
+                        </div>
+                        <p style="margin: 6px 0 0 0; font-size: 0.8rem; color: #3b82f6;">
+                            ✓ All historical complaints, assignments, and audit logs will remain 100% preserved. No business records will ever be deleted.
+                        </p>
+                    </div>
+
+                    <!-- Deletion Option Selector -->
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label style="font-weight: 600; margin-bottom: 8px; display: block;">Select Action Type <span class="required">*</span></label>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <!-- Option A: Soft Delete -->
+                            <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #ffffff;">
+                                <input type="radio" name="delete_type" value="soft" id="delete-type-soft" checked onchange="toggleDeleteTypeUI()" style="margin-top: 3px;">
+                                <div>
+                                    <div style="font-weight: 600; color: var(--text-main);">Soft Delete (Deactivate & Archive)</div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">
+                                        Revokes login access immediately and flags the account as Archived in Google Sheets. All profile history is preserved and can be restored.
+                                    </div>
+                                </div>
+                            </label>
+
+                            <!-- Option B: Permanent Delete -->
+                            <label id="delete-type-perm-label" style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 10px 12px; border: 1px solid #fecaca; border-radius: var(--radius-sm); background: #fef2f2;">
+                                <input type="radio" name="delete_type" value="permanent" id="delete-type-permanent" onchange="toggleDeleteTypeUI()" style="margin-top: 3px;">
+                                <div>
+                                    <div style="font-weight: 600; color: #b91c1c;">Permanent Delete (Purge Account)</div>
+                                    <div style="font-size: 0.8rem; color: #7f1d1d; margin-top: 2px;">
+                                        Permanently removes user row from Google Sheets Users worksheet. Historical complaints retain original user attribution. <strong style="color: #991b1b;">(Restricted to Super Admin)</strong>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Reason for Deletion / Archival -->
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label for="delete-user-reason">Reason for Action <span class="required">*</span></label>
+                        <textarea id="delete-user-reason" required rows="2" placeholder="Specify reason (e.g. Employee offboarded, duplicate registration)..." style="width: 100%;"></textarea>
+                        <small class="text-muted">This reason will be recorded in the permanent audit trail with your timestamp and credentials.</small>
+                    </div>
+
+                    <!-- Confirmation Text Input for Permanent Delete -->
+                    <div id="delete-user-confirm-box" style="display: none; background: #fff5f5; border: 1px solid #fca5a5; padding: 12px 14px; border-radius: var(--radius-sm); margin-bottom: 16px;">
+                        <label for="delete-user-confirm-input" style="font-size: 0.85rem; font-weight: 600; color: #991b1b;">
+                            To confirm permanent deletion, type <code style="background: #fee2e2; color: #991b1b; padding: 2px 4px; border-radius: 3px;">DELETE</code> below:
+                        </label>
+                        <input type="text" id="delete-user-confirm-input" placeholder="DELETE" style="margin-top: 6px; width: 100%; border-color: #f87171;">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeDeleteUserModal()">Cancel</button>
+                    <button type="submit" class="btn btn-warning" id="delete-user-submit-btn">Archive User</button>
                 </div>
             </form>
         </div>
