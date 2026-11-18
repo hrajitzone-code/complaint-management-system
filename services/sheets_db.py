@@ -56,7 +56,7 @@ SHEET_SCHEMAS = {
         'Department Name', 'Category', 'Vendor Name', 'Salesperson Name',
         'Status', 'Closing Date', 'Solution Given', 'Handled By',
         'Total Time Taken', 'Comments', 'GR Amount', 'GR Expected Date',
-        'Attachment Link', 'Last Updated At'
+        'Attachment Link', 'Last Updated At', 'From Department'
     ],
     'Users': [
         'User ID', 'Full Name', 'Email', 'Password Hash', 'Role',
@@ -64,6 +64,12 @@ SHEET_SCHEMAS = {
     ],
     'Departments': [
         'Department ID', 'Name', 'Description', 'Lead Email', 'Is Active', 'Created At'
+    ],
+    'Complaint_Types': [
+        'Type ID', 'Name', 'Description', 'Is Active', 'Created At'
+    ],
+    'Salespersons': [
+        'Salesperson ID', 'Name', 'Phone', 'Email', 'Is Active', 'Created At'
     ],
     'Status History': [
         'History ID', 'Complaint ID', 'Timestamp', 'Old Status', 'New Status',
@@ -167,9 +173,47 @@ class SheetsDB:
                     logger.info(f"Adding canonical headers to empty sheet '{title}'...")
                     ws.append_row(sanitize_row(headers), value_input_option='USER_ENTERED')
 
-        # Zero Dummy Data Policy: No auto-seeding of dummy users, departments or complaints
-        # All structure is strictly preserved with canonical headers only.
-        pass
+        # Ensure 'From Department' column exists in Complaints worksheet header
+        if 'Complaints' in existing_sheets:
+            comp_ws = existing_sheets['Complaints']
+            comp_first_row = comp_ws.row_values(1)
+            if comp_first_row and 'From Department' not in comp_first_row:
+                logger.info("Adding 'From Department' canonical header to Complaints sheet...")
+                execute_with_retry(lambda: comp_ws.update_cell(1, len(comp_first_row) + 1, 'From Department'))
+
+        # Seed initial standard complaint types if Complaint_Types worksheet has no data rows
+        if 'Complaint_Types' in existing_sheets:
+            ct_ws = existing_sheets['Complaint_Types']
+            ct_rows = ct_ws.get_all_values()
+            if len(ct_rows) <= 1:
+                now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                initial_types = [
+                    ('CT-001', 'Damage', 'Damaged or defective merchandise upon arrival or unboxing', 'TRUE', now_str),
+                    ('CT-002', 'Product Defect', 'Manufacturing defect, stitching, material or fabric flaw', 'TRUE', now_str),
+                    ('CT-003', 'Wrong Item Delivered', 'Incorrect size, color, or variant sent to customer', 'TRUE', now_str),
+                    ('CT-004', 'Transit Damage', 'Item damaged during courier or cargo transportation', 'TRUE', now_str),
+                    ('CT-005', 'Billing Discrepancy', 'Invoice amount, discount, or tax calculation error', 'TRUE', now_str),
+                    ('CT-006', 'Delivery Delay', 'Delayed shipment beyond promised delivery date', 'TRUE', now_str),
+                    ('CT-007', 'Quality Issue', 'Fabric or finishing not meeting expected standards', 'TRUE', now_str),
+                    ('CT-008', 'Other', 'Other customer issues or general service complaints', 'TRUE', now_str)
+                ]
+                for r in initial_types:
+                    ct_ws.append_row(sanitize_row(list(r)), value_input_option='USER_ENTERED')
+
+        # Seed initial salespersons if Salespersons worksheet has no data rows
+        if 'Salespersons' in existing_sheets:
+            sp_ws = existing_sheets['Salespersons']
+            sp_rows = sp_ws.get_all_values()
+            if len(sp_rows) <= 1:
+                now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                initial_sp = [
+                    ('SP-001', 'Vikram Rao', '+91 98765 00001', 'vikram.rao@company.local', 'TRUE', now_str),
+                    ('SP-002', 'Priya Sharma', '+91 98765 00002', 'priya.sharma@company.local', 'TRUE', now_str),
+                    ('SP-003', 'Rahul Verma', '+91 98765 00003', 'rahul.verma@company.local', 'TRUE', now_str),
+                    ('SP-004', 'Direct Store Sales', '', '', 'TRUE', now_str)
+                ]
+                for r in initial_sp:
+                    sp_ws.append_row(sanitize_row(list(r)), value_input_option='USER_ENTERED')
 
     @classmethod
     def _get_worksheet(cls, name):
@@ -818,6 +862,451 @@ class SheetsDB:
         cls._reassign_department_in_complaints(old_name, new_name)
 
     # =========================================================================
+    # COMPLAINT TYPES MASTER OPERATIONS
+    # =========================================================================
+
+    @classmethod
+    def get_all_complaint_types(cls, include_inactive=False):
+        """Returns list of complaint types. By default, returns active only."""
+        types = cls._read_records('Complaint_Types', use_cache=True)
+        if include_inactive:
+            return types
+        return [t for t in types if str(t.get('Is Active', 'TRUE')).upper() == 'TRUE']
+
+    @classmethod
+    def get_complaint_type_by_id(cls, type_id):
+        """Finds complaint type by Type ID."""
+        if not type_id:
+            return None
+        target = type_id.strip()
+        types = cls._read_records('Complaint_Types', use_cache=False)
+        for t in types:
+            if t.get('Type ID', '').strip() == target:
+                return dict(t)
+        return None
+
+    @classmethod
+    def get_complaint_type_by_name(cls, name):
+        """Finds complaint type by Name (case-insensitive)."""
+        if not name:
+            return None
+        target = name.strip().lower()
+        types = cls._read_records('Complaint_Types', use_cache=True)
+        for t in types:
+            if t.get('Name', '').strip().lower() == target:
+                return dict(t)
+        return None
+
+    @classmethod
+    def create_complaint_type(cls, name, description=''):
+        """Creates a new complaint type in the Complaint_Types sheet."""
+        with cls._db_lock:
+            clean_name = name.strip()
+            if not clean_name:
+                raise ValueError("Complaint Type name is required.")
+
+            types = cls._read_records('Complaint_Types', use_cache=False)
+            for t in types:
+                if t.get('Name', '').strip().lower() == clean_name.lower():
+                    raise ValueError(f"Complaint Type '{clean_name}' already exists.")
+
+            type_id = f"CT-{len(types) + 1:03d}"
+            now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+            row = [
+                type_id,
+                clean_name,
+                description.strip(),
+                'TRUE',
+                now_str
+            ]
+
+            ws = cls._get_worksheet('Complaint_Types')
+            execute_with_retry(lambda: ws.append_row(sanitize_row(row), value_input_option='USER_ENTERED'))
+            cls._invalidate_cache('Complaint_Types')
+
+            return {
+                'Type ID': type_id,
+                'Name': clean_name,
+                'Description': description.strip(),
+                'Is Active': 'TRUE',
+                'Created At': now_str
+            }
+
+    @classmethod
+    def update_complaint_type(cls, type_id, name, description='', is_active='TRUE'):
+        """Updates an existing complaint type in Google Sheets."""
+        with cls._db_lock:
+            clean_name = name.strip()
+            if not clean_name:
+                raise ValueError("Complaint Type name is required.")
+
+            ws = cls._get_worksheet('Complaint_Types')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            if not rows or len(rows) < 2:
+                raise ValueError(f"Complaint Type '{type_id}' not found.")
+
+            headers = [h.strip() for h in rows[0]]
+            id_idx = headers.index('Type ID') + 1 if 'Type ID' in headers else 1
+            name_idx = headers.index('Name') + 1 if 'Name' in headers else 2
+            desc_idx = headers.index('Description') + 1 if 'Description' in headers else 3
+            active_idx = headers.index('Is Active') + 1 if 'Is Active' in headers else 4
+
+            found_row = None
+            old_name = None
+            for r_idx, r in enumerate(rows[1:], start=2):
+                curr_id = r[id_idx - 1].strip() if len(r) >= id_idx else ''
+                curr_name = r[name_idx - 1].strip() if len(r) >= name_idx else ''
+                if curr_id == type_id.strip():
+                    found_row = r_idx
+                    old_name = curr_name
+                elif curr_name.lower() == clean_name.lower():
+                    raise ValueError(f"Another Complaint Type named '{clean_name}' already exists.")
+
+            if not found_row:
+                raise ValueError(f"Complaint Type '{type_id}' not found.")
+
+            current_row = list(rows[found_row - 1])
+            while len(current_row) < len(headers):
+                current_row.append('')
+
+            current_row[name_idx - 1] = sanitize_cell_value(clean_name)
+            current_row[desc_idx - 1] = sanitize_cell_value(description.strip())
+            current_row[active_idx - 1] = 'TRUE' if str(is_active).upper() in ('TRUE', '1', 'YES') else 'FALSE'
+
+            execute_with_retry(lambda: ws.update(f'A{found_row}', [sanitize_row(current_row)], value_input_option='USER_ENTERED'))
+            cls._invalidate_cache('Complaint_Types')
+
+            # If name changed, rename across linked complaints
+            if old_name and old_name != clean_name:
+                cls._rename_complaint_type_in_complaints(old_name, clean_name)
+
+            return {
+                'Type ID': type_id,
+                'Name': clean_name,
+                'Description': description.strip(),
+                'Is Active': current_row[active_idx - 1],
+                'Created At': current_row[headers.index('Created At')] if 'Created At' in headers else ''
+            }
+
+    @classmethod
+    def get_complaint_type_usage(cls, type_id_or_name):
+        """
+        Counts complaints linked to a complaint type by ID or Name.
+        Returns: (type_dict, count_linked, list_of_complaint_ids).
+        """
+        ct = None
+        types = cls._read_records('Complaint_Types', use_cache=True)
+        for t in types:
+            if t.get('Type ID', '').strip() == type_id_or_name.strip() or \
+               t.get('Name', '').strip().lower() == type_id_or_name.strip().lower():
+                ct = t
+                break
+
+        if not ct:
+            raise ValueError(f"Complaint Type '{type_id_or_name}' not found.")
+
+        target_name = ct['Name'].strip().lower()
+        complaints = cls._read_records('Complaints', use_cache=False)
+        linked_ids = []
+
+        for c in complaints:
+            raw_type = (c.get('Complain Types') or c.get('Subject') or '').strip().lower()
+            if target_name == raw_type:
+                linked_ids.append(c.get('Complaint ID'))
+
+        return ct, len(linked_ids), linked_ids
+
+    @classmethod
+    def delete_complaint_type(cls, type_id):
+        """
+        Deletes a complaint type from Complaint_Types sheet.
+        Blocks deletion if linked to any complaints to prevent data inconsistency.
+        """
+        with cls._db_lock:
+            ct, usage_count, linked_ids = cls.get_complaint_type_usage(type_id)
+
+            if usage_count > 0:
+                raise ValueError(
+                    f"Cannot delete Complaint Type '{ct['Name']}': It is currently used in {usage_count} "
+                    f"complaint(s) ({', '.join(linked_ids[:5])}{'...' if len(linked_ids) > 5 else ''}). "
+                    f"Please deactivate this complaint type instead to preserve historical records."
+                )
+
+            ws = cls._get_worksheet('Complaint_Types')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            headers = [h.strip() for h in rows[0]]
+            id_idx = headers.index('Type ID') + 1 if 'Type ID' in headers else 1
+
+            found_row = None
+            for r_idx, r in enumerate(rows[1:], start=2):
+                if len(r) >= id_idx and r[id_idx - 1].strip() == type_id.strip():
+                    found_row = r_idx
+                    break
+
+            if not found_row:
+                raise ValueError(f"Complaint Type '{type_id}' not found in worksheet.")
+
+            execute_with_retry(lambda: ws.delete_rows(found_row))
+            cls._invalidate_cache('Complaint_Types')
+            return True
+
+    @classmethod
+    def _rename_complaint_type_in_complaints(cls, old_name, new_name):
+        """Renames complaint type across all complaints in Complaints sheet."""
+        ws = cls._get_worksheet('Complaints')
+        rows = execute_with_retry(lambda: ws.get_all_values())
+        if not rows or len(rows) < 2:
+            return
+
+        headers = [h.strip() for h in rows[0]]
+        type_idx = headers.index('Complain Types') + 1 if 'Complain Types' in headers else (headers.index('Subject') + 1 if 'Subject' in headers else -1)
+        if type_idx < 1:
+            return
+
+        target_old = old_name.strip().lower()
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        updated_idx = headers.index('Last Updated At') + 1 if 'Last Updated At' in headers else -1
+
+        for r_idx, r in enumerate(rows[1:], start=2):
+            raw_val = r[type_idx - 1].strip() if len(r) >= type_idx else ''
+            if raw_val.lower() == target_old:
+                current_row = list(r)
+                while len(current_row) < len(headers):
+                    current_row.append('')
+                current_row[type_idx - 1] = sanitize_cell_value(new_name)
+                if updated_idx > 0:
+                    current_row[updated_idx - 1] = sanitize_cell_value(now_str)
+                execute_with_retry(lambda: ws.update(f'A{r_idx}', [sanitize_row(current_row)], value_input_option='USER_ENTERED'))
+
+        cls._invalidate_cache('Complaints')
+
+    # =========================================================================
+    # SALESPERSONS MASTER OPERATIONS
+    # =========================================================================
+
+    @classmethod
+    def get_all_salespersons(cls, include_inactive=False):
+        """Returns list of salespersons. By default, returns active only."""
+        salespersons = cls._read_records('Salespersons', use_cache=True)
+        if include_inactive:
+            return salespersons
+        return [sp for sp in salespersons if str(sp.get('Is Active', 'TRUE')).upper() == 'TRUE']
+
+    @classmethod
+    def get_salesperson_by_id(cls, sp_id):
+        """Finds salesperson by Salesperson ID."""
+        if not sp_id:
+            return None
+        target = sp_id.strip()
+        salespersons = cls._read_records('Salespersons', use_cache=False)
+        for sp in salespersons:
+            if sp.get('Salesperson ID', '').strip() == target:
+                return dict(sp)
+        return None
+
+    @classmethod
+    def get_salesperson_by_name(cls, name):
+        """Finds salesperson by Name (case-insensitive)."""
+        if not name:
+            return None
+        target = name.strip().lower()
+        salespersons = cls._read_records('Salespersons', use_cache=True)
+        for sp in salespersons:
+            if sp.get('Name', '').strip().lower() == target:
+                return dict(sp)
+        return None
+
+    @classmethod
+    def create_salesperson(cls, name, phone='', email=''):
+        """Creates a new salesperson in the Salespersons sheet."""
+        with cls._db_lock:
+            clean_name = name.strip()
+            if not clean_name:
+                raise ValueError("Salesperson name is required.")
+
+            salespersons = cls._read_records('Salespersons', use_cache=False)
+            for sp in salespersons:
+                if sp.get('Name', '').strip().lower() == clean_name.lower():
+                    raise ValueError(f"Salesperson '{clean_name}' already exists.")
+
+            sp_id = f"SP-{len(salespersons) + 1:03d}"
+            now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+            row = [
+                sp_id,
+                clean_name,
+                phone.strip(),
+                email.strip().lower(),
+                'TRUE',
+                now_str
+            ]
+
+            ws = cls._get_worksheet('Salespersons')
+            execute_with_retry(lambda: ws.append_row(sanitize_row(row), value_input_option='USER_ENTERED'))
+            cls._invalidate_cache('Salespersons')
+
+            return {
+                'Salesperson ID': sp_id,
+                'Name': clean_name,
+                'Phone': phone.strip(),
+                'Email': email.strip().lower(),
+                'Is Active': 'TRUE',
+                'Created At': now_str
+            }
+
+    @classmethod
+    def update_salesperson(cls, sp_id, name, phone='', email='', is_active='TRUE'):
+        """Updates an existing salesperson in Google Sheets."""
+        with cls._db_lock:
+            clean_name = name.strip()
+            if not clean_name:
+                raise ValueError("Salesperson name is required.")
+
+            ws = cls._get_worksheet('Salespersons')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            if not rows or len(rows) < 2:
+                raise ValueError(f"Salesperson '{sp_id}' not found.")
+
+            headers = [h.strip() for h in rows[0]]
+            id_idx = headers.index('Salesperson ID') + 1 if 'Salesperson ID' in headers else 1
+            name_idx = headers.index('Name') + 1 if 'Name' in headers else 2
+            phone_idx = headers.index('Phone') + 1 if 'Phone' in headers else 3
+            email_idx = headers.index('Email') + 1 if 'Email' in headers else 4
+            active_idx = headers.index('Is Active') + 1 if 'Is Active' in headers else 5
+
+            found_row = None
+            old_name = None
+            for r_idx, r in enumerate(rows[1:], start=2):
+                curr_id = r[id_idx - 1].strip() if len(r) >= id_idx else ''
+                curr_name = r[name_idx - 1].strip() if len(r) >= name_idx else ''
+                if curr_id == sp_id.strip():
+                    found_row = r_idx
+                    old_name = curr_name
+                elif curr_name.lower() == clean_name.lower():
+                    raise ValueError(f"Another Salesperson named '{clean_name}' already exists.")
+
+            if not found_row:
+                raise ValueError(f"Salesperson '{sp_id}' not found.")
+
+            current_row = list(rows[found_row - 1])
+            while len(current_row) < len(headers):
+                current_row.append('')
+
+            current_row[name_idx - 1] = sanitize_cell_value(clean_name)
+            current_row[phone_idx - 1] = sanitize_cell_value(phone.strip())
+            current_row[email_idx - 1] = sanitize_cell_value(email.strip().lower())
+            current_row[active_idx - 1] = 'TRUE' if str(is_active).upper() in ('TRUE', '1', 'YES') else 'FALSE'
+
+            execute_with_retry(lambda: ws.update(f'A{found_row}', [sanitize_row(current_row)], value_input_option='USER_ENTERED'))
+            cls._invalidate_cache('Salespersons')
+
+            # If name changed, rename across linked complaints
+            if old_name and old_name != clean_name:
+                cls._rename_salesperson_in_complaints(old_name, clean_name)
+
+            return {
+                'Salesperson ID': sp_id,
+                'Name': clean_name,
+                'Phone': phone.strip(),
+                'Email': email.strip().lower(),
+                'Is Active': current_row[active_idx - 1],
+                'Created At': current_row[headers.index('Created At')] if 'Created At' in headers else ''
+            }
+
+    @classmethod
+    def get_salesperson_usage(cls, sp_id_or_name):
+        """
+        Counts complaints linked to a salesperson by ID or Name.
+        Returns: (sp_dict, count_linked, list_of_complaint_ids).
+        """
+        sp = None
+        salespersons = cls._read_records('Salespersons', use_cache=True)
+        for s in salespersons:
+            if s.get('Salesperson ID', '').strip() == sp_id_or_name.strip() or \
+               s.get('Name', '').strip().lower() == sp_id_or_name.strip().lower():
+                sp = s
+                break
+
+        if not sp:
+            raise ValueError(f"Salesperson '{sp_id_or_name}' not found.")
+
+        target_name = sp['Name'].strip().lower()
+        complaints = cls._read_records('Complaints', use_cache=False)
+        linked_ids = []
+
+        for c in complaints:
+            raw_sp = (c.get('Salesperson Name') or '').strip().lower()
+            if target_name == raw_sp:
+                linked_ids.append(c.get('Complaint ID'))
+
+        return sp, len(linked_ids), linked_ids
+
+    @classmethod
+    def delete_salesperson(cls, sp_id):
+        """
+        Deletes a salesperson from Salespersons sheet.
+        Blocks deletion if linked to any complaints to prevent data inconsistency.
+        """
+        with cls._db_lock:
+            sp, usage_count, linked_ids = cls.get_salesperson_usage(sp_id)
+
+            if usage_count > 0:
+                raise ValueError(
+                    f"Cannot delete Salesperson '{sp['Name']}': Referenced in {usage_count} "
+                    f"complaint(s) ({', '.join(linked_ids[:5])}{'...' if len(linked_ids) > 5 else ''}). "
+                    f"Please deactivate this salesperson instead to preserve historical records."
+                )
+
+            ws = cls._get_worksheet('Salespersons')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            headers = [h.strip() for h in rows[0]]
+            id_idx = headers.index('Salesperson ID') + 1 if 'Salesperson ID' in headers else 1
+
+            found_row = None
+            for r_idx, r in enumerate(rows[1:], start=2):
+                if len(r) >= id_idx and r[id_idx - 1].strip() == sp_id.strip():
+                    found_row = r_idx
+                    break
+
+            if not found_row:
+                raise ValueError(f"Salesperson '{sp_id}' not found in worksheet.")
+
+            execute_with_retry(lambda: ws.delete_rows(found_row))
+            cls._invalidate_cache('Salespersons')
+            return True
+
+    @classmethod
+    def _rename_salesperson_in_complaints(cls, old_name, new_name):
+        """Renames salesperson across all complaints in Complaints sheet."""
+        ws = cls._get_worksheet('Complaints')
+        rows = execute_with_retry(lambda: ws.get_all_values())
+        if not rows or len(rows) < 2:
+            return
+
+        headers = [h.strip() for h in rows[0]]
+        sp_idx = headers.index('Salesperson Name') + 1 if 'Salesperson Name' in headers else -1
+        if sp_idx < 1:
+            return
+
+        target_old = old_name.strip().lower()
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        updated_idx = headers.index('Last Updated At') + 1 if 'Last Updated At' in headers else -1
+
+        for r_idx, r in enumerate(rows[1:], start=2):
+            raw_val = r[sp_idx - 1].strip() if len(r) >= sp_idx else ''
+            if raw_val.lower() == target_old:
+                current_row = list(r)
+                while len(current_row) < len(headers):
+                    current_row.append('')
+                current_row[sp_idx - 1] = sanitize_cell_value(new_name)
+                if updated_idx > 0:
+                    current_row[updated_idx - 1] = sanitize_cell_value(now_str)
+                execute_with_retry(lambda: ws.update(f'A{r_idx}', [sanitize_row(current_row)], value_input_option='USER_ENTERED'))
+
+        cls._invalidate_cache('Complaints')
+
+    # =========================================================================
     # COMPLAINT OPERATIONS
     # =========================================================================
 
@@ -831,14 +1320,14 @@ class SheetsDB:
             return record
         c = dict(record)
 
-        # Ensure all 21 canonical fields are present
+        # Ensure all canonical fields are present
         canonical_fields = [
             'Employee Name', 'Complain Date', 'Customer Name', 'Invoice No.',
             'Complain Types', 'Priority', 'Remarks', 'Complain Details',
             'Customer Mobile No.', 'Department Name', 'Category', 'Vendor Name',
             'Salesperson Name', 'Status', 'Closing Date', 'Solution Given',
             'Handled By', 'Total Time Taken', 'Comments', 'GR Amount',
-            'GR Expected Date'
+            'GR Expected Date', 'From Department'
         ]
         for f in canonical_fields:
             if f not in c:
@@ -855,6 +1344,8 @@ class SheetsDB:
             c['Customer Name'] = c['Complainant Name']
         if not c.get('Handled By') and c.get('Assigned To Name'):
             c['Handled By'] = c['Assigned To Name']
+        if not c.get('From Department') and c.get('from_department'):
+            c['From Department'] = c.get('from_department')
 
         # Ensure legacy aliases exist for existing views and components
         c['Subject'] = c.get('Complain Types') or ''
@@ -866,6 +1357,7 @@ class SheetsDB:
         c['Status'] = c.get('Status') or 'Submitted'
         c['Resolved At'] = c.get('Closing Date') or c.get('Resolved At', '')
         c['Resolution Summary'] = c.get('Solution Given') or c.get('Resolution Summary', '')
+        c['from_department'] = c.get('From Department') or 'None'
 
         return c
 
@@ -946,38 +1438,47 @@ class SheetsDB:
             gr_amount = str(kwargs.get('gr_amount') or '').strip()
             gr_expected_date = (kwargs.get('gr_expected_date') or '').strip()
             attachment_link = (kwargs.get('attachment_link') or kwargs.get('attachment_url') or '').strip()
-
-            row = [
-                complaint_id,
-                now_str,              # Timestamp
-                complainant_email,    # Complainant Email
-                employee_name,        # Employee Name
-                complain_date,        # Complain Date
-                customer_name,        # Customer Name
-                invoice_no,           # Invoice No.
-                complain_types,       # Complain Types
-                priority,             # Priority
-                remarks,              # Remarks
-                complain_details,     # Complain Details
-                customer_mobile_no,   # Customer Mobile No.
-                department_name,      # Department Name
-                category,             # Category
-                vendor_name,          # Vendor Name
-                salesperson_name,     # Salesperson Name
-                status,               # Status
-                closing_date,         # Closing Date
-                solution_given,       # Solution Given
-                handled_by,           # Handled By
-                total_time_taken,     # Total Time Taken
-                comments,             # Comments
-                gr_amount,            # GR Amount
-                gr_expected_date,     # GR Expected Date
-                attachment_link,      # Attachment Link
-                now_str               # Last Updated At
-            ]
+            from_department = (kwargs.get('from_department') or kwargs.get('From Department') or 'None').strip()
+            if from_department not in ('Online', 'Offline', 'Packing', 'None'):
+                from_department = 'None'
 
             # 1. Write Complaint record to Complaints worksheet
             complaints_ws = cls._get_worksheet('Complaints')
+            headers = execute_with_retry(lambda: complaints_ws.row_values(1))
+            if not headers:
+                headers = SHEET_SCHEMAS['Complaints']
+                complaints_ws.append_row(sanitize_row(headers), value_input_option='USER_ENTERED')
+
+            field_map = {
+                'Complaint ID': complaint_id,
+                'Timestamp': now_str,
+                'Complainant Email': complainant_email,
+                'Employee Name': employee_name,
+                'Complain Date': complain_date,
+                'Customer Name': customer_name,
+                'Invoice No.': invoice_no,
+                'Complain Types': complain_types,
+                'Priority': priority,
+                'Remarks': remarks,
+                'Complain Details': complain_details,
+                'Customer Mobile No.': customer_mobile_no,
+                'Department Name': department_name,
+                'Category': category,
+                'Vendor Name': vendor_name,
+                'Salesperson Name': salesperson_name,
+                'Status': status,
+                'Closing Date': closing_date,
+                'Solution Given': solution_given,
+                'Handled By': handled_by,
+                'Total Time Taken': total_time_taken,
+                'Comments': comments,
+                'GR Amount': gr_amount,
+                'GR Expected Date': gr_expected_date,
+                'Attachment Link': attachment_link,
+                'Last Updated At': now_str,
+                'From Department': from_department
+            }
+            row = [field_map.get(h, '') for h in headers]
             execute_with_retry(lambda: complaints_ws.append_row(sanitize_row(row), value_input_option='USER_ENTERED'))
             cls._invalidate_cache('Complaints')
 
@@ -1060,7 +1561,8 @@ class SheetsDB:
                 'description': 'Complain Details',
                 'department': 'Department Name',
                 'complainant_name': 'Customer Name',
-                'assigned_to_name': 'Handled By'
+                'assigned_to_name': 'Handled By',
+                'from_department': 'From Department'
             }
             clean_input = dict(data)
             for legacy_k, canon_k in legacy_mappings.items():
@@ -1076,6 +1578,11 @@ class SheetsDB:
                         break
                 if matched_header and matched_header not in ('Complaint ID', 'Timestamp'):
                     updated_dict[matched_header] = str(v).strip()
+
+            # Validate From Department
+            if 'From Department' in updated_dict and updated_dict['From Department']:
+                if updated_dict['From Department'] not in ('Online', 'Offline', 'Packing', 'None'):
+                    updated_dict['From Department'] = 'None'
 
             # Format Priority and Status properly
             if 'Priority' in updated_dict and updated_dict['Priority']:

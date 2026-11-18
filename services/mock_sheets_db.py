@@ -28,6 +28,8 @@ class MockSheetsDB:
         'Complaints': [],
         'Users': [],
         'Departments': [],
+        'Complaint_Types': [],
+        'Salespersons': [],
         'Status History': [],
         'Assignments and Comments': [],
         'System_Config': []
@@ -40,6 +42,8 @@ class MockSheetsDB:
             'Complaints': [],
             'Users': [],
             'Departments': [],
+            'Complaint_Types': [],
+            'Salespersons': [],
             'Status History': [],
             'Assignments and Comments': [],
             'System_Config': []
@@ -67,6 +71,41 @@ class MockSheetsDB:
                 'Name': name,
                 'Description': desc,
                 'Lead Email': lead_email,
+                'Is Active': 'TRUE',
+                'Created At': now_str
+            })
+        # Bootstrap default complaint types
+        default_types = [
+            ('Damage', 'Damaged or defective merchandise upon arrival or unboxing'),
+            ('Product Defect', 'Manufacturing defect, stitching, material or fabric flaw'),
+            ('Wrong Item Delivered', 'Incorrect size, color, or variant sent to customer'),
+            ('Transit Damage', 'Item damaged during courier or cargo transportation'),
+            ('Billing Discrepancy', 'Invoice amount, discount, or tax calculation error'),
+            ('Delivery Delay', 'Delayed shipment beyond promised delivery date'),
+            ('Quality Issue', 'Fabric or finishing not meeting expected standards'),
+            ('Other', 'Other customer issues or general service complaints')
+        ]
+        for idx, (name, desc) in enumerate(default_types, start=1):
+            cls._store['Complaint_Types'].append({
+                'Type ID': f"CT-{idx:03d}",
+                'Name': name,
+                'Description': desc,
+                'Is Active': 'TRUE',
+                'Created At': now_str
+            })
+        # Bootstrap default salespersons
+        default_salespersons = [
+            ('Vikram Rao', '+91 98765 00001', 'vikram.rao@company.local'),
+            ('Priya Sharma', '+91 98765 00002', 'priya.sharma@company.local'),
+            ('Rahul Verma', '+91 98765 00003', 'rahul.verma@company.local'),
+            ('Direct Store Sales', '', '')
+        ]
+        for idx, (name, phone, email) in enumerate(default_salespersons, start=1):
+            cls._store['Salespersons'].append({
+                'Salesperson ID': f"SP-{idx:03d}",
+                'Name': name,
+                'Phone': phone,
+                'Email': email,
                 'Is Active': 'TRUE',
                 'Created At': now_str
             })
@@ -414,6 +453,235 @@ class MockSheetsDB:
                 c['Department'] = c['Department Name']
                 c['Last Updated At'] = now_str
 
+    # =========================================================================
+    # COMPLAINT TYPES MASTER OPERATIONS (MOCK)
+    # =========================================================================
+
+    @classmethod
+    def get_all_complaint_types(cls, include_inactive=False):
+        types = cls._store.get('Complaint_Types', [])
+        if include_inactive:
+            return [dict(t) for t in types]
+        return [dict(t) for t in types if str(t.get('Is Active', 'TRUE')).upper() == 'TRUE']
+
+    @classmethod
+    def get_complaint_type_by_id(cls, type_id):
+        if not type_id: return None
+        for t in cls._store.get('Complaint_Types', []):
+            if t.get('Type ID', '').strip() == type_id.strip():
+                return dict(t)
+        return None
+
+    @classmethod
+    def get_complaint_type_by_name(cls, name):
+        if not name: return None
+        target = name.strip().lower()
+        for t in cls._store.get('Complaint_Types', []):
+            if t.get('Name', '').strip().lower() == target:
+                return dict(t)
+        return None
+
+    @classmethod
+    def create_complaint_type(cls, name, description=''):
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Complaint Type name is required.")
+        for t in cls._store.get('Complaint_Types', []):
+            if t.get('Name', '').strip().lower() == clean_name.lower():
+                raise ValueError(f"Complaint Type '{clean_name}' already exists.")
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        new_id = f"CT-{len(cls._store.get('Complaint_Types', [])) + 1:03d}"
+        item = {
+            'Type ID': new_id,
+            'Name': clean_name,
+            'Description': description.strip(),
+            'Is Active': 'TRUE',
+            'Created At': now_str
+        }
+        cls._store.setdefault('Complaint_Types', []).append(item)
+        return dict(item)
+
+    @classmethod
+    def update_complaint_type(cls, type_id, name, description='', is_active='TRUE'):
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Complaint Type name is required.")
+        found = None
+        old_name = None
+        for t in cls._store.get('Complaint_Types', []):
+            if t.get('Type ID', '').strip() == type_id.strip():
+                found = t
+                old_name = t.get('Name')
+            elif t.get('Name', '').strip().lower() == clean_name.lower():
+                raise ValueError(f"Another Complaint Type named '{clean_name}' already exists.")
+        if not found:
+            raise ValueError(f"Complaint Type '{type_id}' not found.")
+        found['Name'] = clean_name
+        found['Description'] = description.strip()
+        found['Is Active'] = 'TRUE' if str(is_active).upper() in ('TRUE', '1', 'YES') else 'FALSE'
+        if old_name and old_name != clean_name:
+            cls._rename_complaint_type_in_complaints(old_name, clean_name)
+        return dict(found)
+
+    @classmethod
+    def get_complaint_type_usage(cls, type_id_or_name):
+        ct = None
+        for t in cls._store.get('Complaint_Types', []):
+            if t.get('Type ID', '').strip() == type_id_or_name.strip() or \
+               t.get('Name', '').strip().lower() == type_id_or_name.strip().lower():
+                ct = t
+                break
+        if not ct:
+            raise ValueError(f"Complaint Type '{type_id_or_name}' not found.")
+        target = ct['Name'].strip().lower()
+        linked = [c.get('Complaint ID') for c in cls._store.get('Complaints', []) if (c.get('Complain Types') or c.get('Subject') or '').strip().lower() == target]
+        return ct, len(linked), linked
+
+    @classmethod
+    def delete_complaint_type(cls, type_id):
+        ct, usage_count, linked_ids = cls.get_complaint_type_usage(type_id)
+        if usage_count > 0:
+            raise ValueError(
+                f"Cannot delete Complaint Type '{ct['Name']}': It is currently used in {usage_count} "
+                f"complaint(s) ({', '.join(linked_ids[:5])}{'...' if len(linked_ids) > 5 else ''}). "
+                f"Please deactivate this complaint type instead to preserve historical records."
+            )
+        found_idx = None
+        for idx, t in enumerate(cls._store.get('Complaint_Types', [])):
+            if t.get('Type ID', '').strip() == type_id.strip():
+                found_idx = idx
+                break
+        if found_idx is None:
+            raise ValueError(f"Complaint Type '{type_id}' not found.")
+        cls._store['Complaint_Types'].pop(found_idx)
+        return True
+
+    @classmethod
+    def _rename_complaint_type_in_complaints(cls, old_name, new_name):
+        target_old = old_name.strip().lower()
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        for c in cls._store.get('Complaints', []):
+            raw = (c.get('Complain Types') or c.get('Subject') or '').strip().lower()
+            if raw == target_old:
+                c['Complain Types'] = new_name
+                c['Subject'] = new_name
+                c['Last Updated At'] = now_str
+
+    # =========================================================================
+    # SALESPERSONS MASTER OPERATIONS (MOCK)
+    # =========================================================================
+
+    @classmethod
+    def get_all_salespersons(cls, include_inactive=False):
+        salespersons = cls._store.get('Salespersons', [])
+        if include_inactive:
+            return [dict(s) for s in salespersons]
+        return [dict(s) for s in salespersons if str(s.get('Is Active', 'TRUE')).upper() == 'TRUE']
+
+    @classmethod
+    def get_salesperson_by_id(cls, sp_id):
+        if not sp_id: return None
+        for s in cls._store.get('Salespersons', []):
+            if s.get('Salesperson ID', '').strip() == sp_id.strip():
+                return dict(s)
+        return None
+
+    @classmethod
+    def get_salesperson_by_name(cls, name):
+        if not name: return None
+        target = name.strip().lower()
+        for s in cls._store.get('Salespersons', []):
+            if s.get('Name', '').strip().lower() == target:
+                return dict(s)
+        return None
+
+    @classmethod
+    def create_salesperson(cls, name, phone='', email=''):
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Salesperson name is required.")
+        for s in cls._store.get('Salespersons', []):
+            if s.get('Name', '').strip().lower() == clean_name.lower():
+                raise ValueError(f"Salesperson '{clean_name}' already exists.")
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        new_id = f"SP-{len(cls._store.get('Salespersons', [])) + 1:03d}"
+        item = {
+            'Salesperson ID': new_id,
+            'Name': clean_name,
+            'Phone': phone.strip(),
+            'Email': email.strip().lower(),
+            'Is Active': 'TRUE',
+            'Created At': now_str
+        }
+        cls._store.setdefault('Salespersons', []).append(item)
+        return dict(item)
+
+    @classmethod
+    def update_salesperson(cls, sp_id, name, phone='', email='', is_active='TRUE'):
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Salesperson name is required.")
+        found = None
+        old_name = None
+        for s in cls._store.get('Salespersons', []):
+            if s.get('Salesperson ID', '').strip() == sp_id.strip():
+                found = s
+                old_name = s.get('Name')
+            elif s.get('Name', '').strip().lower() == clean_name.lower():
+                raise ValueError(f"Another Salesperson named '{clean_name}' already exists.")
+        if not found:
+            raise ValueError(f"Salesperson '{sp_id}' not found.")
+        found['Name'] = clean_name
+        found['Phone'] = phone.strip()
+        found['Email'] = email.strip().lower()
+        found['Is Active'] = 'TRUE' if str(is_active).upper() in ('TRUE', '1', 'YES') else 'FALSE'
+        if old_name and old_name != clean_name:
+            cls._rename_salesperson_in_complaints(old_name, clean_name)
+        return dict(found)
+
+    @classmethod
+    def get_salesperson_usage(cls, sp_id_or_name):
+        sp = None
+        for s in cls._store.get('Salespersons', []):
+            if s.get('Salesperson ID', '').strip() == sp_id_or_name.strip() or \
+               s.get('Name', '').strip().lower() == sp_id_or_name.strip().lower():
+                sp = s
+                break
+        if not sp:
+            raise ValueError(f"Salesperson '{sp_id_or_name}' not found.")
+        target = sp['Name'].strip().lower()
+        linked = [c.get('Complaint ID') for c in cls._store.get('Complaints', []) if (c.get('Salesperson Name') or '').strip().lower() == target]
+        return sp, len(linked), linked
+
+    @classmethod
+    def delete_salesperson(cls, sp_id):
+        sp, usage_count, linked_ids = cls.get_salesperson_usage(sp_id)
+        if usage_count > 0:
+            raise ValueError(
+                f"Cannot delete Salesperson '{sp['Name']}': Referenced in {usage_count} "
+                f"complaint(s) ({', '.join(linked_ids[:5])}{'...' if len(linked_ids) > 5 else ''}). "
+                f"Please deactivate this salesperson instead to preserve historical records."
+            )
+        found_idx = None
+        for idx, s in enumerate(cls._store.get('Salespersons', [])):
+            if s.get('Salesperson ID', '').strip() == sp_id.strip():
+                found_idx = idx
+                break
+        if found_idx is None:
+            raise ValueError(f"Salesperson '{sp_id}' not found.")
+        cls._store['Salespersons'].pop(found_idx)
+        return True
+
+    @classmethod
+    def _rename_salesperson_in_complaints(cls, old_name, new_name):
+        target_old = old_name.strip().lower()
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        for c in cls._store.get('Complaints', []):
+            raw = (c.get('Salesperson Name') or '').strip().lower()
+            if raw == target_old:
+                c['Salesperson Name'] = new_name
+                c['Last Updated At'] = now_str
+
     @classmethod
     def _normalize_complaint_record(cls, record):
         if not record:
@@ -425,11 +693,17 @@ class MockSheetsDB:
             'Customer Mobile No.', 'Department Name', 'Category', 'Vendor Name',
             'Salesperson Name', 'Status', 'Closing Date', 'Solution Given',
             'Handled By', 'Total Time Taken', 'Comments', 'GR Amount',
-            'GR Expected Date'
+            'GR Expected Date', 'From Department'
         ]
         for f in canonical_fields:
             if f not in c:
                 c[f] = ''
+
+        if not c.get('From Department'):
+            c['From Department'] = c.get('from_department') or 'None'
+        if c.get('From Department') not in ('Online', 'Offline', 'Packing', 'None'):
+            c['From Department'] = 'None'
+        c['from_department'] = c['From Department']
 
         if not c.get('Complain Types') and c.get('Subject'):
             c['Complain Types'] = c['Subject']
@@ -494,6 +768,9 @@ class MockSheetsDB:
         gr_amount = str(kwargs.get('gr_amount') or '').strip()
         gr_expected_date = (kwargs.get('gr_expected_date') or '').strip()
         attachment_link = (kwargs.get('attachment_link') or kwargs.get('attachment_url') or '').strip()
+        from_department = (kwargs.get('from_department') or kwargs.get('From Department') or 'None').strip()
+        if from_department not in ('Online', 'Offline', 'Packing', 'None'):
+            from_department = 'None'
 
         record = {
             'Complaint ID': complaint_id,
@@ -521,7 +798,8 @@ class MockSheetsDB:
             'GR Amount': gr_amount,
             'GR Expected Date': gr_expected_date,
             'Attachment Link': attachment_link,
-            'Last Updated At': now_str
+            'Last Updated At': now_str,
+            'From Department': from_department
         }
 
         cls._store['Complaints'].append(record)
@@ -566,7 +844,8 @@ class MockSheetsDB:
                     'description': 'Complain Details',
                     'department': 'Department Name',
                     'complainant_name': 'Customer Name',
-                    'assigned_to_name': 'Handled By'
+                    'assigned_to_name': 'Handled By',
+                    'from_department': 'From Department'
                 }
                 clean_input = dict(data)
                 for legacy_k, canon_k in legacy_mappings.items():
@@ -578,6 +857,10 @@ class MockSheetsDB:
                         if hk.lower() == k.lower() or hk.lower().replace(' ', '_') == k.lower():
                             if hk not in ('Complaint ID', 'Timestamp'):
                                 c[hk] = sanitize_cell_value(str(v).strip())
+
+                if 'From Department' in c and c['From Department']:
+                    if c['From Department'] not in ('Online', 'Offline', 'Packing', 'None'):
+                        c['From Department'] = 'None'
 
                 if 'Priority' in c and c['Priority']:
                     c['Priority'] = c['Priority'].capitalize()

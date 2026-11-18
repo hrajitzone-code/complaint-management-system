@@ -19,6 +19,7 @@ async function initApp() {
     await checkAuth();
     if (currentUser) {
         await loadDepartments();
+        await loadMasterOptions();
         await checkSystemStatus();
         await loadDriveStatus();
         handleHashRouting();
@@ -137,6 +138,9 @@ function setupEventListeners() {
         if (!e.target.closest('.multi-select-container')) {
             closeAllMultiSelects();
         }
+        if (!e.target.closest('.searchable-select-wrap')) {
+            closeAllSearchableSelects();
+        }
     });
 
     // Backdrop click dismiss for modals
@@ -152,6 +156,9 @@ function setupEventListeners() {
                 else if (modal.id === 'create-dept-modal') closeCreateDeptModal();
                 else if (modal.id === 'edit-dept-modal') closeEditDeptModal();
                 else if (modal.id === 'delete-dept-modal') closeDeleteDeptModal();
+                else if (modal.id === 'modal-master-complaint-type') closeMasterComplaintTypeModal();
+                else if (modal.id === 'modal-master-salesperson') closeMasterSalespersonModal();
+                else if (modal.id === 'modal-master-delete') closeMasterDeleteModal();
                 else if (modal.id === 'configure-oauth-modal') closeConfigureOAuthModal();
                 else if (modal.id === 'printable-report-modal') closePrintableReportModal();
             }
@@ -206,6 +213,21 @@ function setupEventListeners() {
                 closeDeleteDeptModal();
                 return;
             }
+            const mCtModal = document.getElementById('modal-master-complaint-type');
+            if (mCtModal && mCtModal.style.display && mCtModal.style.display !== 'none') {
+                closeMasterComplaintTypeModal();
+                return;
+            }
+            const mSpModal = document.getElementById('modal-master-salesperson');
+            if (mSpModal && mSpModal.style.display && mSpModal.style.display !== 'none') {
+                closeMasterSalespersonModal();
+                return;
+            }
+            const mDelModal = document.getElementById('modal-master-delete');
+            if (mDelModal && mDelModal.style.display && mDelModal.style.display !== 'none') {
+                closeMasterDeleteModal();
+                return;
+            }
         }
     });
 }
@@ -223,6 +245,9 @@ function switchView(viewName) {
             viewName = 'dashboard';
         }
         if (viewName === 'settings' && !isAdmin) {
+            viewName = 'dashboard';
+        }
+        if (viewName === 'master-data' && !isAdmin) {
             viewName = 'dashboard';
         }
     }
@@ -244,7 +269,8 @@ function switchView(viewName) {
             'my-complaints': 'My Complaints',
             'reports': 'Reports & Analytics Hub',
             'manage': 'Staff Workspace — Manage Complaints',
-            'settings': 'Users & System Settings'
+            'settings': 'Users & System Settings',
+            'master-data': 'Master Data Management'
         };
         document.getElementById('page-heading').textContent = headings[viewName] || 'Complaint System';
 
@@ -261,6 +287,7 @@ function switchView(viewName) {
             if (driveDiagnostic) {
                 updateUploadNotice(driveDiagnostic.can_upload_binary, driveDiagnostic);
             }
+            refreshSearchableDropdowns();
         }
 
         // Trigger view-specific data refresh
@@ -269,6 +296,7 @@ function switchView(viewName) {
         if (viewName === 'reports') initReportsView();
         if (viewName === 'manage') loadManageComplaints();
         if (viewName === 'settings') loadSettingsData();
+        if (viewName === 'master-data') loadMasterData();
     }
 }
 
@@ -1093,6 +1121,7 @@ async function handleLodgeComplaint(e) {
     const employee_name = document.getElementById('comp-employee-name').value.trim();
     const salesperson_name = document.getElementById('comp-salesperson-name').value.trim();
     const department_name = document.getElementById('comp-dept').value;
+    const from_department = (document.getElementById('comp-from-dept')?.value || '').trim();
     const complain_types = document.getElementById('comp-type').value.trim();
     const priority = document.getElementById('comp-priority').value;
     const category = document.getElementById('comp-category').value.trim();
@@ -1120,6 +1149,12 @@ async function handleLodgeComplaint(e) {
         return;
     }
 
+    if (!from_department) {
+        showToast('Please select From Department (Online, Offline, Packing, or None).', 'error');
+        document.getElementById('comp-from-dept')?.focus();
+        return;
+    }
+
     if (!customer_name || !complain_types || !complain_details) {
         showToast('Please fill out required fields: Customer Name, Department, Complain Type, and Details.', 'error');
         return;
@@ -1136,6 +1171,7 @@ async function handleLodgeComplaint(e) {
     formData.append('employee_name', employee_name);
     formData.append('salesperson_name', salesperson_name);
     formData.append('department_name', department_name);
+    formData.append('from_department', from_department);
     formData.append('complain_types', complain_types);
     formData.append('priority', priority);
     formData.append('category', category);
@@ -1168,6 +1204,8 @@ async function handleLodgeComplaint(e) {
             showToast(data.message, 'success');
             form.reset();
             clearAllDepartments('lodge');
+            const fromDeptEl = document.getElementById('comp-from-dept');
+            if (fromDeptEl) fromDeptEl.value = '';
             const dateEl = document.getElementById('comp-date');
             if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
             switchView('my-complaints');
@@ -1490,6 +1528,10 @@ function renderComplaintModalData(complaint, history, comments) {
     } else {
         document.getElementById('modal-dept').textContent = '-';
     }
+    const fromDeptEl = document.getElementById('modal-from-dept');
+    if (fromDeptEl) {
+        fromDeptEl.textContent = complaint['From Department'] || complaint.from_department || '-';
+    }
     document.getElementById('modal-complain-type').textContent = complaint['Complain Types'] || complaint.Subject || '-';
     document.getElementById('modal-category').textContent = complaint.Category || '-';
     document.getElementById('modal-vendor-name').textContent = complaint['Vendor Name'] || '-';
@@ -1613,10 +1655,19 @@ async function openEditComplaintModal(complaintId) {
     // Department & classification
     populateDepartmentDropdowns();
     setMultiSelectValues('edit', complaint['Department Name'] || complaint.Department || '');
+    const fromDeptVal = complaint['From Department'] || complaint.from_department || 'None';
+    const editFromDept = document.getElementById('edit-from-dept');
+    if (editFromDept) {
+        editFromDept.value = ['Online', 'Offline', 'Packing', 'None'].includes(fromDeptVal) ? fromDeptVal : 'None';
+    }
     document.getElementById('edit-complain-type').value = complaint['Complain Types'] || complaint.Subject || '';
     document.getElementById('edit-priority').value = complaint.Priority || 'Medium';
     document.getElementById('edit-category').value = complaint.Category || '';
     document.getElementById('edit-vendor-name').value = complaint['Vendor Name'] || '';
+
+    // Initialize searchable options with historical fallback
+    renderSearchableDropdownOptions('edit-complain-type', masterOptionsCache.complaint_types, document.getElementById('edit-complain-type').value);
+    renderSearchableDropdownOptions('edit-salesperson-name', masterOptionsCache.salespersons, document.getElementById('edit-salesperson-name').value);
 
     // Description & remarks
     document.getElementById('edit-description').value = complaint['Complain Details'] || complaint.Description || '';
@@ -1682,6 +1733,7 @@ async function submitEditComplaint(e) {
         employee_name: document.getElementById('edit-employee-name').value.trim(),
         salesperson_name: document.getElementById('edit-salesperson-name').value.trim(),
         department_name: document.getElementById('edit-dept').value,
+        from_department: (document.getElementById('edit-from-dept')?.value || 'None').trim(),
         complain_types: document.getElementById('edit-complain-type').value.trim(),
         priority: document.getElementById('edit-priority').value,
         category: document.getElementById('edit-category').value.trim(),
@@ -3920,5 +3972,682 @@ function loadSavedReportConfiguration() {
         }
     } catch (e) {
         console.warn("Could not load saved report configuration:", e);
+    }
+}
+
+// =============================================================================
+// MASTER DATA & SEARCHABLE DROPDOWNS (Complaint Types, Salespersons, From Dept)
+// =============================================================================
+
+let masterOptionsCache = {
+    complaint_types: [],
+    complaint_types_detailed: [],
+    salespersons: [],
+    salespersons_detailed: [],
+    departments: [],
+    from_departments: ['Online', 'Offline', 'Packing', 'None']
+};
+
+let masterComplaintTypesList = [];
+let masterSalespersonsList = [];
+let activeSearchableInputId = null;
+
+async function loadMasterOptions() {
+    try {
+        const res = await fetch('/api/master/options');
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+            masterOptionsCache = {
+                complaint_types: data.complaint_types || [],
+                complaint_types_detailed: data.complaint_types_detailed || [],
+                salespersons: data.salespersons || [],
+                salespersons_detailed: data.salespersons_detailed || [],
+                departments: data.departments || [],
+                from_departments: data.from_departments || ['Online', 'Offline', 'Packing', 'None']
+            };
+            refreshSearchableDropdowns();
+        }
+    } catch (err) {
+        console.error('Failed to load master options:', err);
+    }
+}
+
+function refreshSearchableDropdowns() {
+    renderSearchableDropdownOptions('comp-type', masterOptionsCache.complaint_types);
+    renderSearchableDropdownOptions('edit-complain-type', masterOptionsCache.complaint_types);
+    renderSearchableDropdownOptions('comp-salesperson-name', masterOptionsCache.salespersons);
+    renderSearchableDropdownOptions('edit-salesperson-name', masterOptionsCache.salespersons);
+}
+
+function renderSearchableDropdownOptions(inputId, optionsList, currentValue = '') {
+    const listEl = document.getElementById(`${inputId}-options`);
+    if (!listEl) return;
+
+    let combined = [...(optionsList || [])];
+    if (currentValue && !combined.some(o => o.toLowerCase() === currentValue.toLowerCase())) {
+        combined.unshift(currentValue);
+    }
+
+    if (!combined.length) {
+        listEl.innerHTML = '<div class="searchable-select-empty">No options registered</div>';
+        return;
+    }
+
+    const cur = (document.getElementById(inputId)?.value || currentValue || '').trim().toLowerCase();
+    listEl.innerHTML = combined.map(opt => {
+        const isSel = opt.toLowerCase() === cur;
+        const isHistorical = currentValue && opt.toLowerCase() === currentValue.toLowerCase() && !(optionsList || []).some(o => o.toLowerCase() === opt.toLowerCase());
+        return `
+            <div class="searchable-select-item ${isSel ? 'is-selected' : ''}" 
+                 data-value="${escapeHtml(opt)}" 
+                 onclick="selectSearchableOption('${inputId}', '${escapeHtml(opt).replace(/'/g, "\\'")}')">
+                <span>${escapeHtml(opt)}</span>
+                ${isHistorical ? '<small class="text-muted" style="font-size:0.75rem;">(Historical)</small>' : (isSel ? '<span>✓</span>' : '')}
+            </div>
+        `;
+    }).join('');
+}
+
+function toggleSearchableSelect(inputId) {
+    const dropdown = document.getElementById(`${inputId}-dropdown`);
+    if (!dropdown) return;
+    const isVisible = dropdown.style.display === 'block';
+    closeAllSearchableSelects();
+    if (!isVisible) {
+        openSearchableSelect(inputId);
+    }
+}
+
+function openSearchableSelect(inputId) {
+    closeAllSearchableSelects();
+    const dropdown = document.getElementById(`${inputId}-dropdown`);
+    const input = document.getElementById(inputId);
+    if (!dropdown || !input) return;
+
+    activeSearchableInputId = inputId;
+    dropdown.style.display = 'block';
+
+    filterSearchableOptions(inputId, input.value.trim());
+
+    if (!input._hasSearchableListener) {
+        input._hasSearchableListener = true;
+        input.addEventListener('input', () => {
+            if (dropdown.style.display !== 'block') {
+                dropdown.style.display = 'block';
+                activeSearchableInputId = inputId;
+            }
+            filterSearchableOptions(inputId, input.value.trim());
+        });
+        input.addEventListener('focus', () => {
+            openSearchableSelect(inputId);
+        });
+        input.addEventListener('keydown', (e) => {
+            handleSearchableKeydown(e, inputId);
+        });
+    }
+}
+
+function closeAllSearchableSelects() {
+    document.querySelectorAll('.searchable-select-dropdown').forEach(dd => {
+        dd.style.display = 'none';
+    });
+    activeSearchableInputId = null;
+}
+
+function filterSearchableOptions(inputId, query) {
+    const listEl = document.getElementById(`${inputId}-options`);
+    if (!listEl) return;
+
+    let sourceList = [];
+    if (inputId.includes('type')) {
+        sourceList = masterOptionsCache.complaint_types || [];
+    } else if (inputId.includes('salesperson')) {
+        sourceList = masterOptionsCache.salespersons || [];
+    }
+
+    const currentInputVal = document.getElementById(inputId)?.value?.trim() || '';
+    let combined = [...sourceList];
+    if (currentInputVal && !combined.some(o => o.toLowerCase() === currentInputVal.toLowerCase())) {
+        combined.unshift(currentInputVal);
+    }
+
+    const cleanQ = (query || '').toLowerCase();
+    const filtered = cleanQ ? combined.filter(opt => opt.toLowerCase().includes(cleanQ)) : combined;
+
+    if (!filtered.length) {
+        listEl.innerHTML = '<div class="searchable-select-empty">No matching options</div>';
+        return;
+    }
+
+    listEl.innerHTML = filtered.map(opt => {
+        const isSel = opt.toLowerCase() === currentInputVal.toLowerCase();
+        const isHistorical = currentInputVal && opt.toLowerCase() === currentInputVal.toLowerCase() && !sourceList.some(o => o.toLowerCase() === opt.toLowerCase());
+        return `
+            <div class="searchable-select-item ${isSel ? 'is-selected' : ''}" 
+                 data-value="${escapeHtml(opt)}" 
+                 onclick="selectSearchableOption('${inputId}', '${escapeHtml(opt).replace(/'/g, "\\'")}')">
+                <span>${escapeHtml(opt)}</span>
+                ${isHistorical ? '<small class="text-muted" style="font-size:0.75rem;">(Historical)</small>' : (isSel ? '<span>✓</span>' : '')}
+            </div>
+        `;
+    }).join('');
+}
+
+function selectSearchableOption(inputId, value) {
+    const input = document.getElementById(inputId);
+    if (input) {
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    closeAllSearchableSelects();
+}
+
+function handleSearchableKeydown(e, inputId) {
+    const dropdown = document.getElementById(`${inputId}-dropdown`);
+    if (!dropdown || dropdown.style.display !== 'block') {
+        if (e.key === 'ArrowDown' || e.key === 'Down') {
+            e.preventDefault();
+            openSearchableSelect(inputId);
+        }
+        return;
+    }
+
+    const items = Array.from(dropdown.querySelectorAll('.searchable-select-item'));
+    if (!items.length) return;
+
+    let focusedIdx = items.findIndex(el => el.classList.contains('is-focused'));
+
+    if (e.key === 'ArrowDown' || e.key === 'Down') {
+        e.preventDefault();
+        if (focusedIdx >= 0) items[focusedIdx].classList.remove('is-focused');
+        focusedIdx = (focusedIdx + 1) % items.length;
+        items[focusedIdx].classList.add('is-focused');
+        items[focusedIdx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp' || e.key === 'Up') {
+        e.preventDefault();
+        if (focusedIdx >= 0) items[focusedIdx].classList.remove('is-focused');
+        focusedIdx = (focusedIdx - 1 + items.length) % items.length;
+        items[focusedIdx].classList.add('is-focused');
+        items[focusedIdx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+        if (focusedIdx >= 0 && items[focusedIdx]) {
+            e.preventDefault();
+            const val = items[focusedIdx].getAttribute('data-value');
+            if (val) selectSearchableOption(inputId, val);
+        }
+    } else if (e.key === 'Escape' || e.key === 'Esc') {
+        e.preventDefault();
+        closeAllSearchableSelects();
+    }
+}
+
+// =============================================================================
+// MASTER DATA MANAGEMENT CRUD CONTROLLERS (Complaint Types & Salespersons)
+// =============================================================================
+
+async function loadMasterData() {
+    await Promise.all([
+        loadMasterComplaintTypes(),
+        loadMasterSalespersons()
+    ]);
+}
+
+async function loadMasterComplaintTypes() {
+    const tbody = document.getElementById('master-ct-table-body');
+    if (!tbody) return;
+    try {
+        const res = await fetch('/api/master/complaint-types?all=true');
+        const data = await res.json();
+        if (res.ok && data.complaint_types) {
+            masterComplaintTypesList = data.complaint_types;
+            filterMasterComplaintTypes();
+        } else {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-danger">${data.message || 'Failed to load complaint types'}</td></tr>`;
+        }
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-danger">Network error loading complaint types: ${e.message}</td></tr>`;
+    }
+}
+
+function filterMasterComplaintTypes() {
+    const tbody = document.getElementById('master-ct-table-body');
+    if (!tbody) return;
+
+    const q = (document.getElementById('master-ct-search')?.value || '').trim().toLowerCase();
+    const statusFilter = document.getElementById('master-ct-status-filter')?.value || 'ALL';
+
+    let filtered = masterComplaintTypesList.filter(item => {
+        const matchesQ = !q || (item.Name || '').toLowerCase().includes(q) || 
+                               (item.Description || '').toLowerCase().includes(q) || 
+                               (item['Type ID'] || '').toLowerCase().includes(q);
+        const isActive = String(item['Is Active']).toUpperCase() === 'TRUE';
+        const matchesStatus = (statusFilter === 'ALL') || 
+                              (statusFilter === 'ACTIVE' && isActive) || 
+                              (statusFilter === 'INACTIVE' && !isActive);
+        return matchesQ && matchesStatus;
+    });
+
+    if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-muted">No complaint types found matching criteria.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(t => {
+        const isActive = String(t['Is Active']).toUpperCase() === 'TRUE';
+        const safeId = escapeHtml(t['Type ID'] || '');
+        const safeName = escapeHtml(t.Name || '');
+        const safeDesc = escapeHtml(t.Description || '');
+        return `
+            <tr>
+                <td><code>${safeId}</code></td>
+                <td><strong>${safeName}</strong></td>
+                <td><span class="text-muted" style="font-size: 0.85rem;">${safeDesc || '—'}</span></td>
+                <td>
+                    <span class="badge ${isActive ? 'badge-status-resolved' : 'badge-status-closed'}">
+                        ${isActive ? 'Active' : 'Inactive'}
+                    </span>
+                </td>
+                <td>
+                    <div style="display: flex; gap: 6px;">
+                        <button class="btn btn-secondary btn-sm" onclick="openEditComplaintTypeModal('${safeId}')">Edit</button>
+                        <button class="btn ${isActive ? 'btn-outline-danger' : 'btn-success'} btn-sm" onclick="toggleComplaintTypeStatus('${safeId}', ${isActive})">
+                            ${isActive ? 'Deactivate' : 'Activate'}
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm" onclick="promptDeleteMasterItem('complaint-type', '${safeId}', '${safeName.replace(/'/g, "\\'")}')">Delete</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function openCreateComplaintTypeModal() {
+    document.getElementById('modal-ct-title').textContent = 'Add Complaint Type';
+    document.getElementById('modal-ct-id').value = '';
+    document.getElementById('modal-ct-id-group').style.display = 'none';
+    document.getElementById('modal-ct-name').value = '';
+    document.getElementById('modal-ct-desc').value = '';
+    document.getElementById('modal-ct-status-group').style.display = 'none';
+    document.getElementById('modal-ct-status').value = 'TRUE';
+    document.getElementById('modal-ct-submit-btn').textContent = 'Create Complaint Type';
+    document.getElementById('modal-master-complaint-type').style.display = 'flex';
+    document.getElementById('modal-ct-name').focus();
+}
+
+function openEditComplaintTypeModal(typeId) {
+    const item = masterComplaintTypesList.find(t => t['Type ID'] === typeId);
+    if (!item) {
+        showToast('Complaint Type not found.', 'error');
+        return;
+    }
+    document.getElementById('modal-ct-title').textContent = `Edit Complaint Type: ${item['Type ID']}`;
+    document.getElementById('modal-ct-id').value = item['Type ID'];
+    document.getElementById('modal-ct-id-display').value = item['Type ID'];
+    document.getElementById('modal-ct-id-group').style.display = 'block';
+    document.getElementById('modal-ct-name').value = item.Name || '';
+    document.getElementById('modal-ct-desc').value = item.Description || '';
+    document.getElementById('modal-ct-status-group').style.display = 'block';
+    document.getElementById('modal-ct-status').value = String(item['Is Active']).toUpperCase() === 'TRUE' ? 'TRUE' : 'FALSE';
+    document.getElementById('modal-ct-submit-btn').textContent = 'Save Changes';
+    document.getElementById('modal-master-complaint-type').style.display = 'flex';
+}
+
+function closeMasterComplaintTypeModal() {
+    document.getElementById('modal-master-complaint-type').style.display = 'none';
+}
+
+async function submitMasterComplaintType(e) {
+    e.preventDefault();
+    const typeId = document.getElementById('modal-ct-id').value.trim();
+    const name = document.getElementById('modal-ct-name').value.trim();
+    const description = document.getElementById('modal-ct-desc').value.trim();
+    const is_active = document.getElementById('modal-ct-status').value;
+    const btn = document.getElementById('modal-ct-submit-btn');
+
+    if (!name) {
+        showToast('Complaint type name is required.', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    try {
+        const url = typeId ? `/api/master/complaint-types/${typeId}` : '/api/master/complaint-types';
+        const method = typeId ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description, is_active })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(data.message, 'success');
+            closeMasterComplaintTypeModal();
+            await loadMasterData();
+            await loadMasterOptions();
+        } else {
+            showToast(data.message || 'Operation failed.', 'error');
+        }
+    } catch (err) {
+        showToast(`Network error: ${err.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = typeId ? 'Save Changes' : 'Create Complaint Type';
+    }
+}
+
+async function toggleComplaintTypeStatus(typeId, currentIsActive) {
+    const item = masterComplaintTypesList.find(t => t['Type ID'] === typeId);
+    if (!item) return;
+    const newStatus = currentIsActive ? 'FALSE' : 'TRUE';
+    try {
+        const res = await fetch(`/api/master/complaint-types/${typeId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: item.Name,
+                description: item.Description || '',
+                is_active: newStatus
+            })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(`Complaint Type '${item.Name}' is now ${newStatus === 'TRUE' ? 'Active' : 'Inactive'}.`, 'success');
+            await loadMasterData();
+            await loadMasterOptions();
+        } else {
+            showToast(data.message || 'Failed to update status.', 'error');
+        }
+    } catch (e) {
+        showToast(`Network error: ${e.message}`, 'error');
+    }
+}
+
+// --- Salespersons Management ---
+
+async function loadMasterSalespersons() {
+    const tbody = document.getElementById('master-sp-table-body');
+    if (!tbody) return;
+    try {
+        const res = await fetch('/api/master/salespersons?all=true');
+        const data = await res.json();
+        if (res.ok && data.salespersons) {
+            masterSalespersonsList = data.salespersons;
+            filterMasterSalespersons();
+        } else {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-danger">${data.message || 'Failed to load salespersons'}</td></tr>`;
+        }
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-danger">Network error loading salespersons: ${e.message}</td></tr>`;
+    }
+}
+
+function filterMasterSalespersons() {
+    const tbody = document.getElementById('master-sp-table-body');
+    if (!tbody) return;
+
+    const q = (document.getElementById('master-sp-search')?.value || '').trim().toLowerCase();
+    const statusFilter = document.getElementById('master-sp-status-filter')?.value || 'ALL';
+
+    let filtered = masterSalespersonsList.filter(item => {
+        const matchesQ = !q || (item.Name || '').toLowerCase().includes(q) || 
+                               (item.Phone || '').toLowerCase().includes(q) || 
+                               (item.Email || '').toLowerCase().includes(q) || 
+                               (item['Salesperson ID'] || '').toLowerCase().includes(q);
+        const isActive = String(item['Is Active']).toUpperCase() === 'TRUE';
+        const matchesStatus = (statusFilter === 'ALL') || 
+                              (statusFilter === 'ACTIVE' && isActive) || 
+                              (statusFilter === 'INACTIVE' && !isActive);
+        return matchesQ && matchesStatus;
+    });
+
+    if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-muted">No salespersons found matching criteria.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(s => {
+        const isActive = String(s['Is Active']).toUpperCase() === 'TRUE';
+        const safeId = escapeHtml(s['Salesperson ID'] || '');
+        const safeName = escapeHtml(s.Name || '');
+        const safePhone = escapeHtml(s.Phone || '');
+        const safeEmail = escapeHtml(s.Email || '');
+        const contactInfo = [safePhone, safeEmail].filter(Boolean).join(' &bull; ');
+        return `
+            <tr>
+                <td><code>${safeId}</code></td>
+                <td><strong>${safeName}</strong></td>
+                <td><span class="text-muted" style="font-size: 0.85rem;">${contactInfo || '—'}</span></td>
+                <td>
+                    <span class="badge ${isActive ? 'badge-status-resolved' : 'badge-status-closed'}">
+                        ${isActive ? 'Active' : 'Inactive'}
+                    </span>
+                </td>
+                <td>
+                    <div style="display: flex; gap: 6px;">
+                        <button class="btn btn-secondary btn-sm" onclick="openEditSalespersonModal('${safeId}')">Edit</button>
+                        <button class="btn ${isActive ? 'btn-outline-danger' : 'btn-success'} btn-sm" onclick="toggleSalespersonStatus('${safeId}', ${isActive})">
+                            ${isActive ? 'Deactivate' : 'Activate'}
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm" onclick="promptDeleteMasterItem('salesperson', '${safeId}', '${safeName.replace(/'/g, "\\'")}')">Delete</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function openCreateSalespersonModal() {
+    document.getElementById('modal-sp-title').textContent = 'Add Salesperson';
+    document.getElementById('modal-sp-id').value = '';
+    document.getElementById('modal-sp-id-group').style.display = 'none';
+    document.getElementById('modal-sp-name').value = '';
+    document.getElementById('modal-sp-phone').value = '';
+    document.getElementById('modal-sp-email').value = '';
+    document.getElementById('modal-sp-status-group').style.display = 'none';
+    document.getElementById('modal-sp-status').value = 'TRUE';
+    document.getElementById('modal-sp-submit-btn').textContent = 'Create Salesperson';
+    document.getElementById('modal-master-salesperson').style.display = 'flex';
+    document.getElementById('modal-sp-name').focus();
+}
+
+function openEditSalespersonModal(spId) {
+    const item = masterSalespersonsList.find(s => s['Salesperson ID'] === spId);
+    if (!item) {
+        showToast('Salesperson not found.', 'error');
+        return;
+    }
+    document.getElementById('modal-sp-title').textContent = `Edit Salesperson: ${item['Salesperson ID']}`;
+    document.getElementById('modal-sp-id').value = item['Salesperson ID'];
+    document.getElementById('modal-sp-id-display').value = item['Salesperson ID'];
+    document.getElementById('modal-sp-id-group').style.display = 'block';
+    document.getElementById('modal-sp-name').value = item.Name || '';
+    document.getElementById('modal-sp-phone').value = item.Phone || '';
+    document.getElementById('modal-sp-email').value = item.Email || '';
+    document.getElementById('modal-sp-status-group').style.display = 'block';
+    document.getElementById('modal-sp-status').value = String(item['Is Active']).toUpperCase() === 'TRUE' ? 'TRUE' : 'FALSE';
+    document.getElementById('modal-sp-submit-btn').textContent = 'Save Changes';
+    document.getElementById('modal-master-salesperson').style.display = 'flex';
+}
+
+function closeMasterSalespersonModal() {
+    document.getElementById('modal-master-salesperson').style.display = 'none';
+}
+
+async function submitMasterSalesperson(e) {
+    e.preventDefault();
+    const spId = document.getElementById('modal-sp-id').value.trim();
+    const name = document.getElementById('modal-sp-name').value.trim();
+    const phone = document.getElementById('modal-sp-phone').value.trim();
+    const email = document.getElementById('modal-sp-email').value.trim();
+    const is_active = document.getElementById('modal-sp-status').value;
+    const btn = document.getElementById('modal-sp-submit-btn');
+
+    if (!name) {
+        showToast('Salesperson name is required.', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    try {
+        const url = spId ? `/api/master/salespersons/${spId}` : '/api/master/salespersons';
+        const method = spId ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, phone, email, is_active })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(data.message, 'success');
+            closeMasterSalespersonModal();
+            await loadMasterData();
+            await loadMasterOptions();
+        } else {
+            showToast(data.message || 'Operation failed.', 'error');
+        }
+    } catch (err) {
+        showToast(`Network error: ${err.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = spId ? 'Save Changes' : 'Create Salesperson';
+    }
+}
+
+async function toggleSalespersonStatus(spId, currentIsActive) {
+    const item = masterSalespersonsList.find(s => s['Salesperson ID'] === spId);
+    if (!item) return;
+    const newStatus = currentIsActive ? 'FALSE' : 'TRUE';
+    try {
+        const res = await fetch(`/api/master/salespersons/${spId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: item.Name,
+                phone: item.Phone || '',
+                email: item.Email || '',
+                is_active: newStatus
+            })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(`Salesperson '${item.Name}' is now ${newStatus === 'TRUE' ? 'Active' : 'Inactive'}.`, 'success');
+            await loadMasterData();
+            await loadMasterOptions();
+        } else {
+            showToast(data.message || 'Failed to update status.', 'error');
+        }
+    } catch (e) {
+        showToast(`Network error: ${e.message}`, 'error');
+    }
+}
+
+// --- Delete & Usage Verification ---
+
+let activeMasterDeleteType = null;
+let activeMasterDeleteId = null;
+
+async function promptDeleteMasterItem(type, id, name) {
+    activeMasterDeleteType = type;
+    activeMasterDeleteId = id;
+
+    const modal = document.getElementById('modal-master-delete');
+    document.getElementById('modal-master-delete-type').value = type;
+    document.getElementById('modal-master-delete-id').value = id;
+    document.getElementById('modal-master-delete-item-name').textContent = name;
+    document.getElementById('modal-master-delete-item-id').textContent = id;
+    document.getElementById('modal-master-delete-title').textContent = type === 'complaint-type' ? 'Delete Complaint Type' : 'Delete Salesperson';
+
+    const loadingEl = document.getElementById('modal-master-delete-loading');
+    const blockedEl = document.getElementById('modal-master-delete-blocked');
+    const allowedEl = document.getElementById('modal-master-delete-allowed');
+    const deactivateBtn = document.getElementById('modal-master-deactivate-instead-btn');
+    const deleteBtn = document.getElementById('modal-master-confirm-delete-btn');
+
+    loadingEl.style.display = 'block';
+    blockedEl.style.display = 'none';
+    allowedEl.style.display = 'none';
+    deactivateBtn.style.display = 'none';
+    deleteBtn.style.display = 'none';
+
+    modal.style.display = 'flex';
+
+    try {
+        const usageEndpoint = type === 'complaint-type' ? 
+            `/api/master/complaint-types/${id}/usage` : 
+            `/api/master/salespersons/${id}/usage`;
+        const res = await fetch(usageEndpoint);
+        const data = await res.json();
+
+        loadingEl.style.display = 'none';
+        if (res.ok && data.status === 'success') {
+            const count = data.usage_count || 0;
+            if (count > 0) {
+                document.getElementById('modal-master-delete-usage-count').textContent = count;
+                blockedEl.style.display = 'block';
+                deactivateBtn.style.display = 'inline-block';
+                deleteBtn.style.display = 'none';
+            } else {
+                allowedEl.style.display = 'block';
+                deleteBtn.style.display = 'inline-block';
+            }
+        } else {
+            showToast(data.message || 'Failed to check usage.', 'error');
+            closeMasterDeleteModal();
+        }
+    } catch (e) {
+        loadingEl.textContent = `Error checking usage: ${e.message}`;
+    }
+}
+
+function closeMasterDeleteModal() {
+    document.getElementById('modal-master-delete').style.display = 'none';
+    activeMasterDeleteType = null;
+    activeMasterDeleteId = null;
+}
+
+async function executeDeactivateInstead() {
+    if (!activeMasterDeleteType || !activeMasterDeleteId) return;
+    const type = activeMasterDeleteType;
+    const id = activeMasterDeleteId;
+    closeMasterDeleteModal();
+    if (type === 'complaint-type') {
+        await toggleComplaintTypeStatus(id, true);
+    } else {
+        await toggleSalespersonStatus(id, true);
+    }
+}
+
+async function executeMasterDelete() {
+    if (!activeMasterDeleteType || !activeMasterDeleteId) return;
+    const type = activeMasterDeleteType;
+    const id = activeMasterDeleteId;
+    const btn = document.getElementById('modal-master-confirm-delete-btn');
+    btn.disabled = true;
+    btn.textContent = 'Deleting...';
+
+    try {
+        const endpoint = type === 'complaint-type' ? 
+            `/api/master/complaint-types/${id}` : 
+            `/api/master/salespersons/${id}`;
+        const res = await fetch(endpoint, { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(data.message, 'success');
+            closeMasterDeleteModal();
+            await loadMasterData();
+            await loadMasterOptions();
+        } else {
+            showToast(data.message || 'Deletion blocked.', 'error');
+        }
+    } catch (e) {
+        showToast(`Network error: ${e.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Delete Permanently';
     }
 }

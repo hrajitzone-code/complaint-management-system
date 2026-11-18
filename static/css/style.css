@@ -1563,6 +1563,91 @@ body.modal-open {
     border: 1px solid #e2e8f0;
 }
 
+/* ==========================================================================
+   SEARCHABLE SINGLE SELECT DROPDOWN (Complaint Types, Salesperson)
+   ========================================================================== */
+.searchable-select-wrap {
+    position: relative;
+    width: 100%;
+}
+
+.searchable-select-wrap input.searchable-select-input {
+    width: 100%;
+    padding-right: 36px;
+    background: var(--surface);
+    cursor: text;
+}
+
+.searchable-select-btn {
+    position: absolute;
+    right: 1px;
+    top: 1px;
+    bottom: 1px;
+    width: 32px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    transition: color 0.15s ease;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.searchable-select-btn:hover {
+    color: var(--primary);
+}
+
+.searchable-select-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.08);
+    z-index: 1100;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.searchable-select-list {
+    padding: 4px 0;
+}
+
+.searchable-select-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 0.88rem;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background 0.12s ease;
+}
+
+.searchable-select-item:hover,
+.searchable-select-item.is-focused {
+    background: #f1f5f9;
+    color: var(--primary);
+}
+
+.searchable-select-item.is-selected {
+    background: #eff6ff;
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.searchable-select-empty {
+    padding: 10px 14px;
+    font-size: 0.84rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+
 @media print {
     body {
         background: #ffffff !important;

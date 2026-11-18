@@ -853,6 +853,261 @@ def delete_department_endpoint(dept_id):
         return jsonify({'status': 'error', 'message': f"Failed to delete department: {str(e)}"}), 500
 
 # =============================================================================
+# MASTER DATA MANAGEMENT APIS (Complaint Types, Salespersons, Options)
+# =============================================================================
+
+@app.route('/api/master/options', methods=['GET'])
+def get_master_options():
+    """
+    Public / logged-in endpoint returning active master-data options for form dropdowns:
+    - Active Complaint Types
+    - Active Salespersons
+    - Active Departments
+    - Canonical From Department choices (['Online', 'Offline', 'Packing', 'None'])
+    """
+    db = get_db()
+    try:
+        types = db.get_all_complaint_types(include_inactive=False)
+        salespersons = db.get_all_salespersons(include_inactive=False)
+        departments = db.get_all_departments(include_inactive=False)
+        return jsonify({
+            'status': 'success',
+            'complaint_types': [t['Name'] for t in types if t.get('Name')],
+            'complaint_types_detailed': types,
+            'salespersons': [s['Name'] for s in salespersons if s.get('Name')],
+            'salespersons_detailed': salespersons,
+            'departments': [d['Name'] for d in departments if d.get('Name')],
+            'from_departments': ['Online', 'Offline', 'Packing', 'None']
+        })
+    except Exception as e:
+        logger.error(f"Error loading master options: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to load master options: {str(e)}"}), 500
+
+# --- Complaint Types ---
+
+@app.route('/api/master/complaint-types', methods=['GET'])
+def list_complaint_types():
+    """Lists complaint types. Supports ?all=true for admin to inspect inactive items."""
+    db = get_db()
+    include_inactive = request.args.get('all', '').lower() in ('true', '1')
+    try:
+        types = db.get_all_complaint_types(include_inactive=include_inactive)
+        return jsonify({'status': 'success', 'complaint_types': types})
+    except Exception as e:
+        logger.error(f"Error fetching complaint types: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to fetch complaint types: {str(e)}"}), 500
+
+@app.route('/api/master/complaint-types/<type_id>', methods=['GET'])
+def get_complaint_type(type_id):
+    """Retrieves single complaint type details."""
+    db = get_db()
+    try:
+        ct = db.get_complaint_type_by_id(type_id)
+        if not ct:
+            return jsonify({'status': 'error', 'message': f"Complaint Type '{type_id}' not found."}), 404
+        return jsonify({'status': 'success', 'complaint_type': ct})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/master/complaint-types/<type_id>/usage', methods=['GET'])
+@admin_required
+def get_complaint_type_usage_endpoint(type_id):
+    """Checks complaint type usage in complaints before deletion."""
+    db = get_db()
+    try:
+        ct, count, linked_ids = db.get_complaint_type_usage(type_id)
+        return jsonify({
+            'status': 'success',
+            'complaint_type': ct,
+            'name': ct.get('Name', ''),
+            'usage_count': count,
+            'linked_complaint_ids': linked_ids,
+            'can_delete': (count == 0)
+        })
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 404
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/master/complaint-types', methods=['POST'])
+@admin_required
+def create_complaint_type_endpoint():
+    """Admin creates a new complaint type."""
+    data = request.get_json(silent=True) or request.form or {}
+    name = (data.get('name') or '').strip()
+    description = (data.get('description') or '').strip()
+
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Complaint type name is required.'}), 400
+
+    db = get_db()
+    try:
+        ct = db.create_complaint_type(name=name, description=description)
+        return jsonify({'status': 'success', 'message': f"Complaint Type '{name}' created.", 'complaint_type': ct}), 201
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 400
+    except Exception as e:
+        logger.error(f"Error creating complaint type: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to create complaint type: {str(e)}"}), 500
+
+@app.route('/api/master/complaint-types/<type_id>', methods=['PUT'])
+@admin_required
+def update_complaint_type_endpoint(type_id):
+    """Admin updates complaint type details or toggles active status."""
+    data = request.get_json(silent=True) or request.form or {}
+    name = (data.get('name') or '').strip()
+    description = (data.get('description') or '').strip()
+    is_active = data.get('is_active', 'TRUE')
+
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Complaint type name is required.'}), 400
+
+    db = get_db()
+    try:
+        updated = db.update_complaint_type(type_id=type_id, name=name, description=description, is_active=is_active)
+        return jsonify({
+            'status': 'success',
+            'message': f"Complaint Type '{name}' updated successfully.",
+            'complaint_type': updated
+        })
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 400
+    except Exception as e:
+        logger.error(f"Error updating complaint type {type_id}: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to update complaint type: {str(e)}"}), 500
+
+@app.route('/api/master/complaint-types/<type_id>', methods=['DELETE'])
+@app.route('/api/master/complaint-types/<type_id>/delete', methods=['POST'])
+@admin_required
+def delete_complaint_type_endpoint(type_id):
+    """
+    Admin deletes a complaint type.
+    Blocks deletion if referenced by any complaints; instructs admin to deactivate instead.
+    """
+    db = get_db()
+    try:
+        db.delete_complaint_type(type_id=type_id)
+        return jsonify({'status': 'success', 'message': f"Complaint Type {type_id} deleted successfully."})
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 409
+    except Exception as e:
+        logger.error(f"Error deleting complaint type {type_id}: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to delete complaint type: {str(e)}"}), 500
+
+# --- Salespersons ---
+
+@app.route('/api/master/salespersons', methods=['GET'])
+def list_salespersons():
+    """Lists salespersons. Supports ?all=true for admin to inspect inactive ones."""
+    db = get_db()
+    include_inactive = request.args.get('all', '').lower() in ('true', '1')
+    try:
+        sp_list = db.get_all_salespersons(include_inactive=include_inactive)
+        return jsonify({'status': 'success', 'salespersons': sp_list})
+    except Exception as e:
+        logger.error(f"Error fetching salespersons: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to fetch salespersons: {str(e)}"}), 500
+
+@app.route('/api/master/salespersons/<sp_id>', methods=['GET'])
+def get_salesperson(sp_id):
+    """Retrieves single salesperson details."""
+    db = get_db()
+    try:
+        sp = db.get_salesperson_by_id(sp_id)
+        if not sp:
+            return jsonify({'status': 'error', 'message': f"Salesperson '{sp_id}' not found."}), 404
+        return jsonify({'status': 'success', 'salesperson': sp})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/master/salespersons/<sp_id>/usage', methods=['GET'])
+@admin_required
+def get_salesperson_usage_endpoint(sp_id):
+    """Checks salesperson usage in complaints before deletion."""
+    db = get_db()
+    try:
+        sp, count, linked_ids = db.get_salesperson_usage(sp_id)
+        return jsonify({
+            'status': 'success',
+            'salesperson': sp,
+            'name': sp.get('Name', ''),
+            'usage_count': count,
+            'linked_complaint_ids': linked_ids,
+            'can_delete': (count == 0)
+        })
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 404
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/master/salespersons', methods=['POST'])
+@admin_required
+def create_salesperson_endpoint():
+    """Admin creates a new salesperson."""
+    data = request.get_json(silent=True) or request.form or {}
+    name = (data.get('name') or '').strip()
+    phone = (data.get('phone') or '').strip()
+    email = (data.get('email') or '').strip()
+
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Salesperson name is required.'}), 400
+
+    db = get_db()
+    try:
+        sp = db.create_salesperson(name=name, phone=phone, email=email)
+        return jsonify({'status': 'success', 'message': f"Salesperson '{name}' created.", 'salesperson': sp}), 201
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 400
+    except Exception as e:
+        logger.error(f"Error creating salesperson: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to create salesperson: {str(e)}"}), 500
+
+@app.route('/api/master/salespersons/<sp_id>', methods=['PUT'])
+@admin_required
+def update_salesperson_endpoint(sp_id):
+    """Admin updates salesperson details or toggles active status."""
+    data = request.get_json(silent=True) or request.form or {}
+    name = (data.get('name') or '').strip()
+    phone = (data.get('phone') or '').strip()
+    email = (data.get('email') or '').strip()
+    is_active = data.get('is_active', 'TRUE')
+
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Salesperson name is required.'}), 400
+
+    db = get_db()
+    try:
+        updated = db.update_salesperson(sp_id=sp_id, name=name, phone=phone, email=email, is_active=is_active)
+        return jsonify({
+            'status': 'success',
+            'message': f"Salesperson '{name}' updated successfully.",
+            'salesperson': updated
+        })
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 400
+    except Exception as e:
+        logger.error(f"Error updating salesperson {sp_id}: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to update salesperson: {str(e)}"}), 500
+
+@app.route('/api/master/salespersons/<sp_id>', methods=['DELETE'])
+@app.route('/api/master/salespersons/<sp_id>/delete', methods=['POST'])
+@admin_required
+def delete_salesperson_endpoint(sp_id):
+    """
+    Admin deletes a salesperson.
+    Blocks deletion if referenced by any complaints; instructs admin to deactivate instead.
+    """
+    db = get_db()
+    try:
+        db.delete_salesperson(sp_id=sp_id)
+        return jsonify({'status': 'success', 'message': f"Salesperson {sp_id} deleted successfully."})
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 409
+    except Exception as e:
+        logger.error(f"Error deleting salesperson {sp_id}: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to delete salesperson: {str(e)}"}), 500
+
+# =============================================================================
 # COMPLAINTS APIS
 # =============================================================================
 
@@ -896,6 +1151,7 @@ def lodge_complaint():
     gr_amount = str(raw_data.get('gr_amount') or raw_data.get('GR Amount') or '').strip()
     gr_expected_date = (raw_data.get('gr_expected_date') or raw_data.get('GR Expected Date') or '').strip()
     attachment_link = (raw_data.get('attachment_link') or raw_data.get('Attachment Link') or '').strip()
+    from_department = (raw_data.get('from_department') or raw_data.get('From Department') or 'None').strip()
 
     # Form Validation
     if not customer_name:
@@ -906,6 +1162,8 @@ def lodge_complaint():
         return jsonify({'status': 'error', 'message': 'Complain Types is required.'}), 400
     if not complain_details:
         return jsonify({'status': 'error', 'message': 'Complain Details is required.'}), 400
+    if from_department not in ('Online', 'Offline', 'Packing', 'None'):
+        return jsonify({'status': 'error', 'message': f"Invalid From Department '{from_department}'. Must be one of: Online, Offline, Packing, None."}), 400
 
     if gr_amount:
         try:
@@ -968,6 +1226,7 @@ def lodge_complaint():
             gr_amount=gr_amount,
             gr_expected_date=gr_expected_date,
             attachment_link=attachment_link,
+            from_department=from_department,
             complainant_email=user['email']
         )
 
@@ -1027,6 +1286,13 @@ def update_complaint_endpoint(complaint_id):
                 return jsonify({'status': 'error', 'message': 'GR Amount must be a positive number.'}), 400
         except ValueError:
             return jsonify({'status': 'error', 'message': 'GR Amount must be a valid numeric amount.'}), 400
+
+    # Validate From Department if provided
+    from_dept = raw_data.get('from_department') or raw_data.get('From Department')
+    if from_dept is not None:
+        from_dept = str(from_dept).strip()
+        if from_dept and from_dept not in ('Online', 'Offline', 'Packing', 'None'):
+            return jsonify({'status': 'error', 'message': f"Invalid From Department '{from_dept}'. Must be one of: Online, Offline, Packing, None."}), 400
 
     try:
         updated = db.update_complaint(complaint_id, raw_data, user)

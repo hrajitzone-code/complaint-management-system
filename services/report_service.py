@@ -36,6 +36,7 @@ ALL_REPORT_COLUMNS = [
     {'id': 'Employee Name', 'label': 'Employee Name', 'category': 'Staff', 'default': False},
     {'id': 'Salesperson Name', 'label': 'Salesperson', 'category': 'Staff', 'default': False},
     {'id': 'Department Name', 'label': 'Department', 'category': 'Classification', 'default': True},
+    {'id': 'From Department', 'label': 'From Department', 'category': 'Classification', 'default': True},
     {'id': 'Complain Types', 'label': 'Complain Types', 'category': 'Classification', 'default': True},
     {'id': 'Category', 'label': 'Category', 'category': 'Classification', 'default': False},
     {'id': 'Vendor Name', 'label': 'Vendor Name', 'category': 'Classification', 'default': True},
