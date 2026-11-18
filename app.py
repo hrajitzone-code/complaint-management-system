@@ -218,7 +218,10 @@ def resolve_active_redirect_uri():
     supporting localhost, 127.0.0.1, or production Vercel with HTTPS.
     """
     if os.environ.get('OAUTH_REDIRECT_URI'):
-        return os.environ.get('OAUTH_REDIRECT_URI').strip()
+        uri = os.environ.get('OAUTH_REDIRECT_URI').strip().rstrip('/')
+        if not uri.endswith('/api/drive/oauth2callback'):
+            uri = f"{uri}/api/drive/oauth2callback"
+        return uri
 
     try:
         host = request.headers.get('X-Forwarded-Host') or request.host

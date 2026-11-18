@@ -708,6 +708,8 @@ function renderDriveOAuthPanel(drive) {
     if (redEl) redEl.textContent = redirectUri;
     const modalRedEl = document.getElementById('modal-redirect-uri-display');
     if (modalRedEl) modalRedEl.value = redirectUri;
+    const vercelRedEl = document.getElementById('drive-redirect-uri-vercel');
+    if (vercelRedEl) vercelRedEl.textContent = 'https://complaint-management-system-sigma-nine.vercel.app/api/drive/oauth2callback';
 
     // Toggle disconnect and authorize buttons
     const disconnectBtn = document.getElementById('btn-drive-disconnect');
