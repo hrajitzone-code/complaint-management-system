@@ -138,6 +138,70 @@ function setupEventListeners() {
             closeAllMultiSelects();
         }
     });
+
+    // Backdrop click dismiss for modals
+    document.querySelectorAll('.modal-backdrop').forEach(modal => {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                if (modal.id === 'edit-user-modal') closeEditUserModal();
+                else if (modal.id === 'create-user-modal') closeCreateUserModal();
+                else if (modal.id === 'complaint-detail-modal') closeComplaintModal();
+                else if (modal.id === 'edit-complaint-modal') closeEditComplaintModal();
+                else if (modal.id === 'delete-confirm-modal') closeDeleteConfirmModal();
+                else if (modal.id === 'create-dept-modal') closeCreateDeptModal();
+                else if (modal.id === 'edit-dept-modal') closeEditDeptModal();
+                else if (modal.id === 'delete-dept-modal') closeDeleteDeptModal();
+                else if (modal.id === 'configure-oauth-modal') closeConfigureOAuthModal();
+                else if (modal.id === 'printable-report-modal') closePrintableReportModal();
+            }
+        });
+    });
+
+    // Global keyboard navigation: Esc key to dismiss any active modal
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' || e.key === 'Esc') {
+            const editUserModal = document.getElementById('edit-user-modal');
+            if (editUserModal && editUserModal.style.display && editUserModal.style.display !== 'none') {
+                closeEditUserModal();
+                return;
+            }
+            const createUserModal = document.getElementById('create-user-modal');
+            if (createUserModal && createUserModal.style.display && createUserModal.style.display !== 'none') {
+                closeCreateUserModal();
+                return;
+            }
+            const editCompModal = document.getElementById('edit-complaint-modal');
+            if (editCompModal && editCompModal.style.display && editCompModal.style.display !== 'none') {
+                closeEditComplaintModal();
+                return;
+            }
+            const compModal = document.getElementById('complaint-detail-modal');
+            if (compModal && compModal.style.display && compModal.style.display !== 'none') {
+                closeComplaintModal();
+                return;
+            }
+            const delModal = document.getElementById('delete-confirm-modal');
+            if (delModal && delModal.style.display && delModal.style.display !== 'none') {
+                closeDeleteConfirmModal();
+                return;
+            }
+            const editDeptModal = document.getElementById('edit-dept-modal');
+            if (editDeptModal && editDeptModal.style.display && editDeptModal.style.display !== 'none') {
+                closeEditDeptModal();
+                return;
+            }
+            const createDeptModal = document.getElementById('create-dept-modal');
+            if (createDeptModal && createDeptModal.style.display && createDeptModal.style.display !== 'none') {
+                closeCreateDeptModal();
+                return;
+            }
+            const delDeptModal = document.getElementById('delete-dept-modal');
+            if (delDeptModal && delDeptModal.style.display && delDeptModal.style.display !== 'none') {
+                closeDeleteDeptModal();
+                return;
+            }
+        }
+    });
 }
 
 function handleHashRouting() {
@@ -654,6 +718,7 @@ function openConfigureOAuthModal() {
 function closeConfigureOAuthModal() {
     const modal = document.getElementById('configure-oauth-modal');
     if (modal) modal.style.display = 'none';
+    syncBodyModalOpen();
 }
 
 async function submitConfigureOAuth(e) {
@@ -1356,6 +1421,7 @@ async function openComplaintModal(complaintId) {
 function closeComplaintModal() {
     document.getElementById('complaint-detail-modal').style.display = 'none';
     activeComplaintId = null;
+    syncBodyModalOpen();
 }
 
 function openEditModalFromDetail() {
@@ -1545,6 +1611,7 @@ async function openEditComplaintModal(complaintId) {
 function closeEditComplaintModal() {
     document.getElementById('edit-complaint-modal').style.display = 'none';
     activeEditComplaintId = null;
+    syncBodyModalOpen();
 }
 
 function recalculateEditTimeTaken() {
@@ -1651,6 +1718,7 @@ function openDeleteModal(complaintId) {
 function closeDeleteConfirmModal() {
     document.getElementById('delete-confirm-modal').style.display = 'none';
     complaintToDeleteId = null;
+    syncBodyModalOpen();
 }
 
 async function executeDeleteComplaint() {
@@ -1874,11 +1942,35 @@ async function loadAdminUsers() {
     }
 }
 
+function syncBodyModalOpen() {
+    const activeModals = document.querySelectorAll('.modal-backdrop');
+    let anyOpen = false;
+    for (let i = 0; i < activeModals.length; i++) {
+        const m = activeModals[i];
+        if (m.style.display && m.style.display !== 'none') {
+            anyOpen = true;
+            break;
+        }
+    }
+    if (anyOpen) {
+        document.body.classList.add('modal-open');
+    } else {
+        document.body.classList.remove('modal-open');
+    }
+}
+
 function openCreateUserModal() {
-    document.getElementById('create-user-modal').style.display = 'flex';
+    const modal = document.getElementById('create-user-modal');
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    const modalBody = modal.querySelector('.modal-body');
+    if (modalBody) {
+        modalBody.scrollTop = 0;
+    }
 }
 function closeCreateUserModal() {
     document.getElementById('create-user-modal').style.display = 'none';
+    syncBodyModalOpen();
 }
 
 async function submitCreateUser(e) {
@@ -1965,11 +2057,18 @@ function openEditUserModal(userId) {
         if (statusNote) statusNote.textContent = '';
     }
 
-    document.getElementById('edit-user-modal').style.display = 'flex';
+    const modal = document.getElementById('edit-user-modal');
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    const modalBody = modal.querySelector('.modal-body');
+    if (modalBody) {
+        modalBody.scrollTop = 0;
+    }
 }
 
 function closeEditUserModal() {
     document.getElementById('edit-user-modal').style.display = 'none';
+    syncBodyModalOpen();
 }
 
 async function submitEditUser(e) {
@@ -2099,6 +2198,7 @@ function openCreateDeptModal() {
 
 function closeCreateDeptModal() {
     document.getElementById('create-dept-modal').style.display = 'none';
+    syncBodyModalOpen();
 }
 
 async function submitCreateDept(e) {
@@ -2154,6 +2254,7 @@ async function openEditDeptModal(deptId) {
 function closeEditDeptModal() {
     document.getElementById('edit-dept-modal').style.display = 'none';
     activeEditDept = null;
+    syncBodyModalOpen();
 }
 
 async function submitEditDept(e) {
@@ -2266,6 +2367,7 @@ function closeDeleteDeptModal() {
     activeDeleteDeptId = null;
     activeDeleteDeptName = '';
     activeDeleteLinkedCount = 0;
+    syncBodyModalOpen();
 }
 
 async function executeDeleteDept() {
@@ -3516,6 +3618,7 @@ function openPrintableReport() {
 function closePrintableReportModal() {
     const modal = document.getElementById('printable-report-modal');
     if (modal) modal.style.display = 'none';
+    syncBodyModalOpen();
 }
 
 function executeBrowserPrint() {

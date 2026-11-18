@@ -1557,13 +1557,13 @@
     </div>
 
     <!-- CREATE USER MODAL -->
-    <div id="create-user-modal" class="modal-backdrop" style="display: none;">
+    <div id="create-user-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true">
         <div class="modal-dialog">
             <div class="modal-header">
                 <h3>Create New User</h3>
-                <button class="btn-close" onclick="closeCreateUserModal()">&times;</button>
+                <button type="button" class="btn-close" onclick="closeCreateUserModal()" aria-label="Close modal">&times;</button>
             </div>
-            <form onsubmit="submitCreateUser(event)">
+            <form class="modal-form" onsubmit="submitCreateUser(event)">
                 <div class="modal-body">
                     <div class="form-group">
                         <label>Full Name <span class="required">*</span></label>
@@ -1599,13 +1599,13 @@
     </div>
 
     <!-- EDIT USER MODAL -->
-    <div id="edit-user-modal" class="modal-backdrop" style="display: none;">
+    <div id="edit-user-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="edit-user-title">
         <div class="modal-dialog">
             <div class="modal-header">
-                <h3>Edit User</h3>
-                <button class="btn-close" onclick="closeEditUserModal()">&times;</button>
+                <h3 id="edit-user-title">Edit User</h3>
+                <button type="button" class="btn-close" onclick="closeEditUserModal()" aria-label="Close modal">&times;</button>
             </div>
-            <form onsubmit="submitEditUser(event)">
+            <form class="modal-form" onsubmit="submitEditUser(event)">
                 <input type="hidden" id="edit-user-id">
                 <div class="modal-body">
                     <div class="form-group">
