@@ -1896,7 +1896,8 @@ class SheetsDB:
         user = dict(user_dict) if user_dict else {
             'email': user_email,
             'role': role,
-            'department': user_departments or ''
+            'department': user_departments or '',
+            'departments': user_departments if isinstance(user_departments, list) else None
         }
         try:
             custom_roles = cls.get_all_roles()

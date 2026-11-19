@@ -532,29 +532,128 @@ class RBACService:
     @classmethod
     def get_user_departments(cls, user: Dict[str, Any]) -> List[str]:
         """
-        Parses user's authorized department list from comma-separated string or list.
-        Returns list of clean uppercase/trimmed department names.
+        Parses user's authorized department list from list, comma/semicolon/pipe separated string.
+        Returns unique list of clean trimmed department names.
         """
         if not user:
             return []
 
-        raw = user.get('department') or user.get('Department') or ''
+        raw = (
+            user.get('departments')
+            or user.get('Departments')
+            or user.get('department')
+            or user.get('Department')
+            or ''
+        )
         if isinstance(raw, list):
-            return [str(d).strip() for d in raw if str(d).strip()]
-        if not raw:
-            return []
+            items = raw
+        else:
+            items = str(raw).replace(';', ',').replace('|', ',').split(',')
 
-        return [d.strip() for d in str(raw).split(',') if d.strip()]
+        depts = []
+        seen = set()
+        for d in items:
+            clean = str(d).strip()
+            if clean and clean.lower() not in seen:
+                seen.add(clean.lower())
+                depts.append(clean)
+        return depts
 
     @classmethod
     def parse_complaint_departments(cls, complaint: Dict[str, Any]) -> List[str]:
-        """Parses all departments associated with a complaint (supports comma-separated)."""
+        """
+        Parses all departments associated with a complaint.
+        Includes both target 'Department Name' and source 'From Department' (Online, Offline, Packing, etc.).
+        Supports comma, semicolon, pipe separated values.
+        """
         if not complaint:
             return []
-        raw = complaint.get('Department Name') or complaint.get('department_name') or complaint.get('Department') or ''
-        if isinstance(raw, list):
-            return [str(d).strip() for d in raw if str(d).strip()]
-        return [d.strip() for d in str(raw).split(',') if d.strip()]
+
+        dept_sources = []
+        # Target Department Name (e.g. Kurti, Readymade, Saree)
+        target_dept = (
+            complaint.get('Department Name')
+            or complaint.get('department_name')
+            or complaint.get('Department')
+            or complaint.get('department')
+            or ''
+        )
+        if target_dept:
+            dept_sources.append(target_dept)
+
+        # Source / Origin Department (e.g. Online, Offline, Packing)
+        from_dept = (
+            complaint.get('From Department')
+            or complaint.get('from_department')
+            or complaint.get('FromDept')
+            or ''
+        )
+        if from_dept and str(from_dept).strip().lower() not in ('none', 'n/a', ''):
+            dept_sources.append(from_dept)
+
+        depts = []
+        seen = set()
+        for src in dept_sources:
+            if isinstance(src, list):
+                items = src
+            else:
+                items = str(src).replace(';', ',').replace('|', ',').split(',')
+            for item in items:
+                clean = str(item).strip()
+                if clean and clean.lower() not in seen:
+                    seen.add(clean.lower())
+                    depts.append(clean)
+        return depts
+
+    @classmethod
+    def is_handled_by_user(cls, user: Dict[str, Any], complaint: Dict[str, Any]) -> bool:
+        """
+        Checks whether the given user is assigned as the handler ('Handled By') of the complaint.
+        Handles:
+        - Full name matches: 'Nita Chaudhary' == 'Nita Chaudhary'
+        - First name / nickname / token matches: 'Nita' in 'Nita Chaudhary' or 'NITA' == 'Nita'
+        - Email matches: 'ajitzonealleditor@gmail.com' == 'ajitzonealleditor@gmail.com'
+        - Email username prefix matches: 'ajitzonealleditor'
+        - Comma/slash separated multi-handler lists: 'Nita, Rahul'
+        - Case and whitespace insensitive.
+        """
+        if not user or not complaint:
+            return False
+
+        handled_by_raw = complaint.get('Handled By') or complaint.get('handled_by') or ''
+        if not handled_by_raw:
+            return False
+
+        # Split handlers by comma or slash
+        tokens = [h.strip().lower() for h in str(handled_by_raw).replace('/', ',').split(',') if h.strip()]
+        if not tokens:
+            return False
+
+        user_name = (user.get('name') or user.get('Full Name') or '').strip().lower()
+        user_email = (user.get('email') or user.get('Email') or '').strip().lower()
+        user_id = (user.get('user_id') or user.get('User ID') or '').strip().lower()
+
+        name_parts = [p.strip().lower() for p in user_name.split() if p.strip()]
+        email_prefix = user_email.split('@')[0].strip().lower() if '@' in user_email else ''
+
+        for tok in tokens:
+            # Exact match with full name, email, or user id
+            if tok == user_name or tok == user_email or (user_id and tok == user_id):
+                return True
+            # Token matches first name or any component of user name (e.g. 'nita' matches 'nita chaudhary')
+            if tok in name_parts:
+                return True
+            # Token matches email prefix
+            if email_prefix and tok == email_prefix:
+                return True
+            # Prefix match: user name starts with token (length >= 3)
+            if len(tok) >= 3 and user_name.startswith(tok):
+                return True
+            # Token starts with user name (e.g. 'nita chaudhary (sales)')
+            if user_name and tok.startswith(user_name):
+                return True
+
+        return False
 
     @classmethod
     def can_access_complaint(
@@ -610,7 +709,7 @@ class RBACService:
         if data_scope == 'ALL':
             return True, "Authorized across all departments."
 
-        user_email = (user.get('email') or '').lower().strip()
+        user_email = (user.get('email') or user.get('Email') or '').lower().strip()
         comp_owner = (complaint.get('Complainant Email') or complaint.get('email') or '').lower().strip()
         is_owner = bool(user_email and user_email == comp_owner)
 
@@ -618,27 +717,33 @@ class RBACService:
         if action == 'view' and is_owner:
             return True, "Authorized as complaint owner."
 
-        # Status constraint for regular users editing: only allowed if Status is 'Submitted'
-        if action == 'edit' and is_owner and role == 'User':
-            status = complaint.get('Status', 'Submitted')
-            if status != 'Submitted':
-                return False, f"Cannot edit complaint in '{status}' status. Only 'Submitted' complaints can be edited by regular users."
-            return True, "Authorized to edit submitted complaint."
+        # Complainant / Creator Edit Matching
+        if action == 'edit' and is_owner:
+            if role == 'User':
+                status = complaint.get('Status', 'Submitted')
+                if status != 'Submitted':
+                    return False, f"Cannot edit complaint in '{status}' status. Only 'Submitted' complaints can be edited by regular users."
+                return True, "Authorized to edit submitted complaint."
+            else:
+                # Staff or Executive account who submitted the complaint is authorized to edit it
+                return True, "Authorized to edit own complaint."
 
-        # 4. Department Scope matching
+        # 4. Staff assigned as 'Handled By' can access (view, edit, change status, assign, etc.)
+        is_assigned_staff = cls.is_handled_by_user(user, complaint)
+        if is_assigned_staff:
+            return True, "Authorized as assigned complaint handler."
+
+        # 5. Department Scope matching
         user_depts = [d.lower() for d in cls.get_user_departments(user)]
+        if '*' in user_depts or 'all' in user_depts:
+            return True, "Authorized across all company departments."
+
         comp_depts = [d.lower() for d in cls.parse_complaint_departments(complaint)]
 
         # Check if ANY department in complaint matches ANY of user's authorized departments
         dept_match = any(cd in user_depts for cd in comp_depts) if user_depts and comp_depts else False
-
-        # Staff assigned as 'Handled By' can also access
-        user_name = (user.get('name') or user.get('Full Name') or '').lower().strip()
-        handled_by = (complaint.get('Handled By') or complaint.get('handled_by') or '').lower().strip()
-        is_assigned_staff = bool(user_name and handled_by and user_name == handled_by)
-
-        if dept_match or is_assigned_staff:
-            return True, "Authorized by department scope or assignment."
+        if dept_match:
+            return True, "Authorized by department scope."
 
         # If scope is OWN and not owner, deny
         if data_scope == 'OWN':
@@ -671,9 +776,12 @@ class RBACService:
         if data_scope == 'ALL':
             return complaints
 
-        user_email = (user.get('email') or '').lower().strip()
-        user_name = (user.get('name') or user.get('Full Name') or '').lower().strip()
+        user_email = (user.get('email') or user.get('Email') or '').lower().strip()
         user_depts = {d.lower() for d in cls.get_user_departments(user)}
+
+        # If user is authorized for all departments
+        if '*' in user_depts or 'all' in user_depts:
+            return complaints
 
         filtered = []
         for c in complaints:
@@ -682,14 +790,13 @@ class RBACService:
                 filtered.append(c)
                 continue
 
+            if cls.is_handled_by_user(user, c):
+                filtered.append(c)
+                continue
+
             if data_scope == 'DEPARTMENT':
                 comp_depts = {d.lower() for d in cls.parse_complaint_departments(c)}
                 if user_depts.intersection(comp_depts):
-                    filtered.append(c)
-                    continue
-
-                handled_by = (c.get('Handled By') or c.get('handled_by') or '').lower().strip()
-                if user_name and handled_by and user_name == handled_by:
                     filtered.append(c)
                     continue
 

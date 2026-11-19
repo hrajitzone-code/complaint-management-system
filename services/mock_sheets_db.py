@@ -1074,7 +1074,8 @@ class MockSheetsDB:
         user = dict(user_dict) if user_dict else {
             'email': user_email,
             'role': role,
-            'department': user_departments or ''
+            'department': user_departments or '',
+            'departments': user_departments if isinstance(user_departments, list) else None
         }
         custom_roles = cls.get_all_roles()
         filtered = RBACService.filter_complaints_by_scope(normalized, user, custom_roles=custom_roles)
