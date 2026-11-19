@@ -4786,10 +4786,14 @@ async function loadRolesDropdownForUsers() {
             const currentVal = el.value;
 
             el.innerHTML = allRolesCache.map(r => {
-                const isSuper = r.role_name === 'Super Admin';
+                const roleName = r.role_name || r.Name || r.name || '';
+                const isSuper = roleName === 'Super Admin';
                 const disabled = isSuper && !isSuperAdmin ? 'disabled' : '';
-                const systemBadge = r.is_system ? ' (System)' : '';
-                return `<option value="${escapeHtml(r.role_name)}" ${disabled} ${isSuper ? 'id="opt-edit-role-super-admin"' : ''}>${escapeHtml(r.role_name)}${systemBadge}</option>`;
+                const isSys = (r.is_system !== undefined) ? !!r.is_system : 
+                              (r.is_system_role !== undefined) ? !!r.is_system_role : 
+                              (String(r['Is System Role']).toUpperCase() === 'TRUE');
+                const systemBadge = isSys ? ' (System)' : '';
+                return `<option value="${escapeHtml(roleName)}" ${disabled} ${isSuper ? 'id="opt-edit-role-super-admin"' : ''}>${escapeHtml(roleName)}${systemBadge}</option>`;
             }).join('');
 
             if (currentVal && Array.from(el.options).some(o => o.value === currentVal)) {
@@ -4843,26 +4847,47 @@ function renderRolesTable() {
     const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
 
     tbody.innerHTML = allRolesCache.map(r => {
-        const isSystem = !!r.is_system;
-        const scope = r.data_scope || 'OWN';
+        const roleId = r.role_id || r['Role ID'] || r.id || '';
+        const roleName = r.role_name || r.Name || r.name || '';
+        const description = r.description || r.Description || '';
+        const isSystem = (r.is_system !== undefined) ? !!r.is_system : 
+                         (r.is_system_role !== undefined) ? !!r.is_system_role : 
+                         (String(r['Is System Role']).toUpperCase() === 'TRUE');
+        const scope = (r.data_scope || r['Data Scope'] || 'DEPARTMENT').toUpperCase();
+        
         let scopeColor = '#64748b';
         let scopeBg = '#f1f5f9';
         if (scope === 'ALL') { scopeColor = '#3730a3'; scopeBg = '#e0e7ff'; }
         else if (scope === 'DEPARTMENT') { scopeColor = '#065f46'; scopeBg = '#ecfdf5'; }
         else if (scope === 'OWN') { scopeColor = '#92400e'; scopeBg = '#fef3c7'; }
 
-        const permsList = r.permissions || [];
+        // Robustly parse permissions list
+        let permsList = [];
+        if (Array.isArray(r.permissions)) {
+            permsList = r.permissions;
+        } else if (typeof r.Permissions === 'string') {
+            permsList = r.Permissions.split(',').map(p => p.trim()).filter(Boolean);
+        } else if (typeof r.permissions === 'string') {
+            permsList = r.permissions.split(',').map(p => p.trim()).filter(Boolean);
+        } else if (Array.isArray(r.Permissions)) {
+            permsList = r.Permissions;
+        }
+
         const isWildcard = permsList.includes('*');
+        const totalPermsCount = (allPermissionsCache && allPermissionsCache.length) ? allPermissionsCache.length : 44;
         const permBadge = isWildcard ? 
-            '<span class="badge" style="background: #eff6ff; color: #1d4ed8; font-weight: 600;">Full Access (*)</span>' : 
-            `<span class="badge" style="background: #f8fafc; color: #334155;">${permsList.length} of ${allPermissionsCache.length || 28} perms</span>`;
+            `<span class="badge" style="background: #eff6ff; color: #1d4ed8; font-weight: 600;">Full Access (${totalPermsCount} perms)</span>` : 
+            `<span class="badge" style="background: #f8fafc; color: #334155;">${permsList.length} of ${totalPermsCount} perms</span>`;
+
+        const userCount = (r.assigned_users_count !== undefined) ? r.assigned_users_count :
+                          (r.assigned_user_count !== undefined) ? r.assigned_user_count : 0;
 
         let actionBtns = '';
         if (isSuperAdmin) {
-            actionBtns += `<button type="button" class="btn btn-outline-primary btn-sm" style="margin-right: 4px;" onclick="openEditRoleModal('${escapeHtml(r.role_id)}')" title="Edit Role and Permissions">Edit</button>`;
-            actionBtns += `<button type="button" class="btn btn-outline-secondary btn-sm" style="margin-right: 4px;" onclick="openCloneRoleModal('${escapeHtml(r.role_id)}')" title="Clone as new custom role">Clone</button>`;
+            actionBtns += `<button type="button" class="btn btn-outline-primary btn-sm" style="margin-right: 4px;" onclick="openEditRoleModal('${escapeHtml(roleId)}')" title="Edit Role and Permissions">Edit</button>`;
+            actionBtns += `<button type="button" class="btn btn-outline-secondary btn-sm" style="margin-right: 4px;" onclick="openCloneRoleModal('${escapeHtml(roleId)}')" title="Clone as new custom role">Clone</button>`;
             if (!isSystem) {
-                actionBtns += `<button type="button" class="btn btn-outline-danger btn-sm" onclick="openDeleteRoleModal('${escapeHtml(r.role_id)}', '${escapeHtml(r.role_name)}')" title="Delete custom role">Delete</button>`;
+                actionBtns += `<button type="button" class="btn btn-outline-danger btn-sm" onclick="openDeleteRoleModal('${escapeHtml(roleId)}', '${escapeHtml(roleName)}')" title="Delete custom role">Delete</button>`;
             }
         } else {
             actionBtns = '<span class="text-muted" style="font-size: 0.8rem;">Read-only</span>';
@@ -4871,8 +4896,8 @@ function renderRolesTable() {
         return `
             <tr>
                 <td>
-                    <div style="font-weight: 600; color: #0f172a;">${escapeHtml(r.role_name)}</div>
-                    <small class="text-muted">${escapeHtml(r.description || '')}</small>
+                    <div style="font-weight: 600; color: #0f172a;">${escapeHtml(roleName)}</div>
+                    <small class="text-muted">${escapeHtml(description)}</small>
                 </td>
                 <td>
                     <span class="badge" style="background: ${isSystem ? '#e0f2fe; color: #0369a1;' : '#f3e8ff; color: #7e22ce;'}">
@@ -4885,7 +4910,7 @@ function renderRolesTable() {
                     </span>
                 </td>
                 <td>
-                    <span style="font-family: monospace; font-size: 0.9rem;">${escapeHtml(String(r.assigned_users_count || 0))}</span> users
+                    <span style="font-family: monospace; font-size: 0.9rem;">${escapeHtml(String(userCount))}</span> users
                 </td>
                 <td>${permBadge}</td>
                 <td>${actionBtns}</td>
@@ -4900,7 +4925,11 @@ function populateRoleCloneDropdown() {
     const currentVal = sel.value;
 
     sel.innerHTML = '<option value="">-- Choose a template to pre-fill --</option>' +
-        allRolesCache.map(r => `<option value="${escapeHtml(r.role_name)}">${escapeHtml(r.role_name)} (${escapeHtml(r.data_scope || 'OWN')})</option>`).join('');
+        allRolesCache.map(r => {
+            const roleName = r.role_name || r.Name || r.name || '';
+            const scope = r.data_scope || r['Data Scope'] || 'DEPARTMENT';
+            return `<option value="${escapeHtml(roleName)}">${escapeHtml(roleName)} (${escapeHtml(scope)})</option>`;
+        }).join('');
 
     if (currentVal) sel.value = currentVal;
 }
@@ -4985,11 +5014,16 @@ function setAllPermissions(enable) {
 function applyRoleTemplateClone() {
     const sel = document.getElementById('role-builder-clone-source');
     if (!sel || !sel.value) return;
-    const tplRole = allRolesCache.find(r => r.role_name === sel.value);
+    const tplRole = allRolesCache.find(r => (r.role_name || r.Name || r.name) === sel.value);
     if (!tplRole) return;
 
-    document.getElementById('role-builder-scope').value = tplRole.data_scope || 'OWN';
-    renderPermissionsMatrix(tplRole.permissions || [], false);
+    document.getElementById('role-builder-scope').value = tplRole.data_scope || tplRole['Data Scope'] || 'DEPARTMENT';
+    let perms = [];
+    if (Array.isArray(tplRole.permissions)) perms = tplRole.permissions;
+    else if (typeof tplRole.Permissions === 'string') perms = tplRole.Permissions.split(',').map(p => p.trim()).filter(Boolean);
+    else if (typeof tplRole.permissions === 'string') perms = tplRole.permissions.split(',').map(p => p.trim()).filter(Boolean);
+    else if (Array.isArray(tplRole.Permissions)) perms = tplRole.Permissions;
+    renderPermissionsMatrix(perms, false);
 }
 
 function openCreateRoleModal() {
@@ -5009,19 +5043,31 @@ function openCreateRoleModal() {
 }
 
 function openEditRoleModal(roleId) {
-    const role = allRolesCache.find(r => r.role_id === roleId);
+    const role = allRolesCache.find(r => (r.role_id || r['Role ID'] || r.id) === roleId);
     if (!role) {
         showToast('Role configuration not found.', 'error');
         return;
     }
 
-    document.getElementById('role-builder-mode').value = 'edit';
-    document.getElementById('role-builder-original-id').value = role.role_id;
-    document.getElementById('modal-role-builder-title').textContent = `Edit Role: ${role.role_name}`;
-    document.getElementById('role-builder-name').value = role.role_name;
+    const rId = role.role_id || role['Role ID'] || role.id;
+    const rName = role.role_name || role.Name || role.name || '';
+    const isSystem = (role.is_system !== undefined) ? !!role.is_system : 
+                     (role.is_system_role !== undefined) ? !!role.is_system_role : 
+                     (String(role['Is System Role']).toUpperCase() === 'TRUE');
+    const isSuperAdminRole = rName === 'Super Admin';
+    const dataScope = role.data_scope || role['Data Scope'] || 'DEPARTMENT';
+    const description = role.description || role.Description || '';
 
-    const isSystem = !!role.is_system;
-    const isSuperAdminRole = role.role_name === 'Super Admin';
+    let perms = [];
+    if (Array.isArray(role.permissions)) perms = role.permissions;
+    else if (typeof role.Permissions === 'string') perms = role.Permissions.split(',').map(p => p.trim()).filter(Boolean);
+    else if (typeof role.permissions === 'string') perms = role.permissions.split(',').map(p => p.trim()).filter(Boolean);
+    else if (Array.isArray(role.Permissions)) perms = role.Permissions;
+
+    document.getElementById('role-builder-mode').value = 'edit';
+    document.getElementById('role-builder-original-id').value = rId;
+    document.getElementById('modal-role-builder-title').textContent = `Edit Role: ${rName}`;
+    document.getElementById('role-builder-name').value = rName;
 
     // System roles cannot be renamed
     document.getElementById('role-builder-name').disabled = isSystem;
@@ -5031,30 +5077,40 @@ function openEditRoleModal(roleId) {
         hint.textContent = isSystem ? 'System default role names are protected and cannot be renamed.' : '';
     }
 
-    document.getElementById('role-builder-scope').value = role.data_scope || 'OWN';
-    document.getElementById('role-builder-desc').value = role.description || '';
+    document.getElementById('role-builder-scope').value = dataScope;
+    document.getElementById('role-builder-desc').value = description;
     document.getElementById('role-builder-clone-source').value = '';
 
-    renderPermissionsMatrix(role.permissions || [], isSuperAdminRole);
+    renderPermissionsMatrix(perms, isSuperAdminRole);
     document.getElementById('modal-role-builder').style.display = 'flex';
     syncBodyModalOpen();
 }
 
 function openCloneRoleModal(roleId) {
-    const role = allRolesCache.find(r => r.role_id === roleId);
+    const role = allRolesCache.find(r => (r.role_id || r['Role ID'] || r.id) === roleId);
     if (!role) return;
+
+    const rName = role.role_name || role.Name || role.name || '';
+    const dataScope = role.data_scope || role['Data Scope'] || 'DEPARTMENT';
+    const description = role.description || role.Description || '';
+
+    let perms = [];
+    if (Array.isArray(role.permissions)) perms = role.permissions;
+    else if (typeof role.Permissions === 'string') perms = role.Permissions.split(',').map(p => p.trim()).filter(Boolean);
+    else if (typeof role.permissions === 'string') perms = role.permissions.split(',').map(p => p.trim()).filter(Boolean);
+    else if (Array.isArray(role.Permissions)) perms = role.Permissions;
 
     document.getElementById('role-builder-mode').value = 'create';
     document.getElementById('role-builder-original-id').value = '';
-    document.getElementById('modal-role-builder-title').textContent = `Create Role (Cloned from ${role.role_name})`;
-    document.getElementById('role-builder-name').value = `${role.role_name} Copy`;
+    document.getElementById('modal-role-builder-title').textContent = `Create Role (Cloned from ${rName})`;
+    document.getElementById('role-builder-name').value = `${rName} Copy`;
     document.getElementById('role-builder-name').disabled = false;
     document.getElementById('role-builder-name-hint').style.display = 'none';
-    document.getElementById('role-builder-scope').value = role.data_scope || 'OWN';
-    document.getElementById('role-builder-desc').value = `Cloned from ${role.role_name}. ${role.description || ''}`.trim();
-    document.getElementById('role-builder-clone-source').value = role.role_name;
+    document.getElementById('role-builder-scope').value = dataScope;
+    document.getElementById('role-builder-desc').value = `Cloned from ${rName}. ${description}`.trim();
+    document.getElementById('role-builder-clone-source').value = rName;
 
-    renderPermissionsMatrix(role.permissions || [], false);
+    renderPermissionsMatrix(perms, false);
     document.getElementById('modal-role-builder').style.display = 'flex';
     syncBodyModalOpen();
 }
@@ -5145,12 +5201,13 @@ async function openDeleteRoleModal(roleId, roleName) {
     syncBodyModalOpen();
 
     try {
-        const res = await fetch(`/api/rbac/roles/${roleId}/usage`);
+        const res = await fetch(`/api/rbac/roles/${encodeURIComponent(roleId)}/usage`);
         const data = await res.json();
         loadingEl.style.display = 'none';
 
         if (res.ok) {
-            const count = data.assigned_users_count || 0;
+            const count = (data.assigned_users_count !== undefined) ? data.assigned_users_count :
+                          (data.assigned_user_count !== undefined) ? data.assigned_user_count : 0;
             if (count > 0) {
                 document.getElementById('role-delete-usage-count').textContent = count;
                 blockedEl.style.display = 'block';

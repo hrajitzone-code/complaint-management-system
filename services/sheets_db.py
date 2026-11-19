@@ -1090,23 +1090,24 @@ class SheetsDB:
         role = cls.get_role_by_id(role_id_or_name) or cls.get_role_by_name(role_id_or_name)
         if not role:
             raise ValueError(f"Role '{role_id_or_name}' not found.")
-        target_name = role['Name'].strip().lower()
+        target_name = (role.get('Name') or role.get('role_name') or '').strip().lower()
         users = cls.get_all_users()
-        linked_users = [u for u in users if (u.get('Role') or '').strip().lower() == target_name]
-        return role, len(linked_users), [u.get('Email') for u in linked_users]
+        linked_users = [u for u in users if (u.get('Role') or u.get('role') or '').strip().lower() == target_name]
+        return role, len(linked_users), linked_users
 
     @classmethod
     def delete_role(cls, role_id):
         role = cls.get_role_by_id(role_id)
         if not role:
             raise ValueError(f"Role '{role_id}' not found.")
-        if str(role.get('Is System Role', '')).upper() == 'TRUE':
-            raise ValueError(f"Cannot delete system role '{role.get('Name')}'. System roles are permanently protected.")
+        if str(role.get('Is System Role', '')).upper() == 'TRUE' or str(role.get('is_system', '')).upper() == 'TRUE':
+            raise ValueError(f"Cannot delete system role '{role.get('Name') or role.get('role_name')}'. System roles are permanently protected.")
 
-        role, usage_count, linked_emails = cls.get_role_usage(role_id)
+        role, usage_count, linked_users = cls.get_role_usage(role_id)
         if usage_count > 0:
+            linked_emails = [u.get('Email', '') if isinstance(u, dict) else str(u) for u in linked_users]
             raise ValueError(
-                f"Cannot delete role '{role['Name']}': Assigned to {usage_count} user(s) "
+                f"Cannot delete role '{role.get('Name') or role.get('role_name')}': Assigned to {usage_count} user(s) "
                 f"({', '.join(linked_emails[:3])}{'...' if len(linked_emails) > 3 else ''}). "
                 f"Please reassign these users to another role before deleting."
             )

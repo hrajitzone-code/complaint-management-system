@@ -2277,13 +2277,104 @@ def get_rbac_permissions():
         'all_permission_ids': sorted(list(ALL_PERMISSION_IDS))
     })
 
+def normalize_role_dict(r, usage_counts=None):
+    """
+    Normalizes a role record into a consistent structure with both
+    camelCase/snake_case and Title Case properties, parsed permissions list,
+    boolean system-role flags, and accurate user assignment counts.
+    """
+    if not isinstance(r, dict):
+        return r
+    role_id = str(r.get('role_id') or r.get('Role ID') or r.get('id') or '').strip()
+    role_name = str(r.get('role_name') or r.get('Name') or r.get('name') or '').strip()
+    description = str(r.get('description') or r.get('Description') or '').strip()
+    data_scope = str(r.get('data_scope') or r.get('Data Scope') or 'DEPARTMENT').strip().upper()
+    if data_scope not in ('ALL', 'DEPARTMENT', 'OWN'):
+        data_scope = 'DEPARTMENT'
+
+    # Permissions list
+    raw_perms = r.get('permissions') if r.get('permissions') is not None else r.get('Permissions')
+    if isinstance(raw_perms, list):
+        perms_list = [str(p).strip() for p in raw_perms if str(p).strip()]
+    elif isinstance(raw_perms, str):
+        perms_list = [p.strip() for p in raw_perms.split(',') if p.strip()]
+    else:
+        perms_list = []
+
+    # If Super Admin, ensure '*' is in perms_list for full wildcard access representation
+    if role_name == 'Super Admin' and '*' not in perms_list:
+        perms_list = ['*'] + perms_list
+
+    # System role boolean
+    if 'is_system' in r and isinstance(r['is_system'], bool):
+        is_system = r['is_system']
+    elif 'is_system_role' in r and isinstance(r['is_system_role'], bool):
+        is_system = r['is_system_role']
+    elif 'Is System Role' in r:
+        is_system = str(r['Is System Role']).strip().upper() == 'TRUE'
+    else:
+        is_system = role_name in DEFAULT_ROLE_TEMPLATES
+
+    # User count
+    user_count = 0
+    if usage_counts is not None and role_name:
+        user_count = usage_counts.get(role_name.lower(), 0)
+    elif 'assigned_users_count' in r:
+        try:
+            user_count = int(r['assigned_users_count'])
+        except (ValueError, TypeError):
+            user_count = 0
+    elif 'assigned_user_count' in r:
+        try:
+            user_count = int(r['assigned_user_count'])
+        except (ValueError, TypeError):
+            user_count = 0
+
+    return {
+        # Preferred API properties
+        'role_id': role_id,
+        'role_name': role_name,
+        'name': role_name,
+        'description': description,
+        'data_scope': data_scope,
+        'permissions': perms_list,
+        'is_system': is_system,
+        'is_system_role': is_system,
+        'assigned_users_count': user_count,
+        'assigned_user_count': user_count,
+        # Google Sheets original headers for backward compatibility
+        'Role ID': role_id,
+        'Name': role_name,
+        'Description': description,
+        'Data Scope': data_scope,
+        'Permissions': perms_list,
+        'Is System Role': 'TRUE' if is_system else 'FALSE'
+    }
+
 @app.route('/api/rbac/roles', methods=['GET'])
 @login_required
 def list_roles():
-    """Lists all configurable roles and system defaults."""
+    """Lists all configurable roles and system defaults with live assignment counts."""
     db = get_db()
     try:
-        roles = db.get_all_roles()
+        raw_roles = db.get_all_roles() or []
+
+        # Calculate live user assignment counts
+        all_users = []
+        try:
+            all_users = db.get_all_users() or []
+        except Exception as ue:
+            logger.warning(f"Could not fetch users to compute role counts: {ue}")
+
+        usage_counts = {}
+        for u in all_users:
+            raw_role = u.get('Role') or u.get('role') or ''
+            r_canon = RBACService.canonical_role(raw_role)
+            if r_canon:
+                key = r_canon.strip().lower()
+                usage_counts[key] = usage_counts.get(key, 0) + 1
+
+        roles = [normalize_role_dict(r, usage_counts) for r in raw_roles]
         return jsonify({
             'status': 'success',
             'roles': roles,
@@ -2296,13 +2387,13 @@ def list_roles():
 @app.route('/api/rbac/roles/<role_id>', methods=['GET'])
 @login_required
 def get_role_details(role_id):
-    """Retrieves single role definition."""
+    """Retrieves single normalized role definition."""
     db = get_db()
     try:
         r = db.get_role_by_id(role_id)
         if not r:
             return jsonify({'status': 'error', 'message': f"Role '{role_id}' not found."}), 404
-        return jsonify({'status': 'success', 'role': r})
+        return jsonify({'status': 'success', 'role': normalize_role_dict(r)})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -2314,14 +2405,30 @@ def get_role_usage_endpoint(role_id):
     db = get_db()
     try:
         role, count, assigned = db.get_role_usage(role_id)
-        is_sys = str(role.get('Is System Role', 'FALSE')).upper() == 'TRUE'
+        is_sys = str(role.get('Is System Role', 'FALSE')).upper() == 'TRUE' or bool(role.get('is_system'))
+
+        assigned_user_dicts = []
+        for u in assigned:
+            if isinstance(u, dict):
+                assigned_user_dicts.append({
+                    'user_id': u.get('User ID') or u.get('user_id'),
+                    'name': u.get('Name') or u.get('name'),
+                    'email': u.get('Email') or u.get('email'),
+                    'role': u.get('Role') or u.get('role'),
+                    'department': u.get('Department') or u.get('department'),
+                })
+            else:
+                assigned_user_dicts.append({'email': str(u)})
+
+        normalized_role = normalize_role_dict(role)
         return jsonify({
             'status': 'success',
-            'role': role,
-            'role_name': role.get('Name', ''),
+            'role': normalized_role,
+            'role_name': normalized_role.get('role_name', ''),
             'is_system_role': is_sys,
             'assigned_user_count': count,
-            'assigned_users': [dict(u) for u in assigned],
+            'assigned_users_count': count,
+            'assigned_users': assigned_user_dicts,
             'can_delete': (not is_sys and count == 0)
         })
     except ValueError as val_err:
@@ -2331,7 +2438,7 @@ def get_role_usage_endpoint(role_id):
 
 @app.route('/api/rbac/roles', methods=['POST'])
 @login_required
-@permission_required('roles:create')
+@permission_required('roles:manage')
 def create_role_endpoint():
     """Super Admin creates a new custom role."""
     data = request.get_json(silent=True) or request.form or {}
@@ -2362,7 +2469,7 @@ def create_role_endpoint():
                 user_role=current_user.get('role'),
                 action='ROLE_CREATED',
                 module='RBAC',
-                record_id=new_role.get('Role ID'),
+                record_id=new_role.get('Role ID') or new_role.get('role_id'),
                 department=current_user.get('department'),
                 details=f"Created custom role '{name}' with data scope '{data_scope}'.",
                 new_state=json.dumps(new_role),
@@ -2372,10 +2479,11 @@ def create_role_endpoint():
         except Exception as audit_err:
             logger.warning(f"Could not record audit log: {audit_err}")
 
+        normalized = normalize_role_dict(new_role)
         return jsonify({
             'status': 'success',
             'message': f"Role '{name}' created successfully.",
-            'role': new_role
+            'role': normalized
         }), 201
     except ValueError as val_err:
         return jsonify({'status': 'error', 'message': str(val_err)}), 400
@@ -2385,7 +2493,7 @@ def create_role_endpoint():
 
 @app.route('/api/rbac/roles/<role_id>', methods=['PUT'])
 @login_required
-@permission_required('roles:edit')
+@permission_required('roles:manage')
 def update_role_endpoint(role_id):
     """Super Admin updates an existing role configuration."""
     data = request.get_json(silent=True) or request.form or {}
@@ -2408,6 +2516,7 @@ def update_role_endpoint(role_id):
             data_scope=data_scope,
             permissions=permissions
         )
+        role_display_name = updated.get('Name') or updated.get('role_name') or name or role_id
         try:
             db.log_audit_event(
                 user_id=current_user.get('user_id'),
@@ -2417,7 +2526,7 @@ def update_role_endpoint(role_id):
                 module='RBAC',
                 record_id=role_id,
                 department=current_user.get('department'),
-                details=f"Updated role '{updated.get('Name')}'.",
+                details=f"Updated role '{role_display_name}'.",
                 previous_state=json.dumps(old_role),
                 new_state=json.dumps(updated),
                 result='SUCCESS',
@@ -2426,10 +2535,11 @@ def update_role_endpoint(role_id):
         except Exception as audit_err:
             logger.warning(f"Could not record audit log: {audit_err}")
 
+        normalized = normalize_role_dict(updated)
         return jsonify({
             'status': 'success',
-            'message': f"Role '{updated.get('Name')}' updated successfully.",
-            'role': updated
+            'message': f"Role '{role_display_name}' updated successfully.",
+            'role': normalized
         })
     except ValueError as val_err:
         return jsonify({'status': 'error', 'message': str(val_err)}), 400
@@ -2440,7 +2550,7 @@ def update_role_endpoint(role_id):
 @app.route('/api/rbac/roles/<role_id>', methods=['DELETE'])
 @app.route('/api/rbac/roles/<role_id>/delete', methods=['POST'])
 @login_required
-@permission_required('roles:delete')
+@permission_required('roles:manage')
 def delete_role_endpoint(role_id):
     """Super Admin deletes a non-system role after verifying no users are assigned."""
     current_user = get_current_user()
