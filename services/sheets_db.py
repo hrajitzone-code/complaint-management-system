@@ -21,6 +21,11 @@ from services.crypto_utils import (
     decrypt_secret,
     mask_secret
 )
+from services.rbac_service import (
+    RBACService,
+    DEFAULT_ROLE_TEMPLATES,
+    ALL_PERMISSION_IDS
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +65,10 @@ SHEET_SCHEMAS = {
     ],
     'Users': [
         'User ID', 'Full Name', 'Email', 'Password Hash', 'Role',
-        'Department', 'Is Active', 'Created At', 'Last Login'
+        'Department', 'Is Active', 'Created At', 'Last Login', 'Custom Permissions'
+    ],
+    'Roles': [
+        'Role ID', 'Name', 'Description', 'Data Scope', 'Permissions', 'Is System Role', 'Created At', 'Last Updated At'
     ],
     'Departments': [
         'Department ID', 'Name', 'Description', 'Lead Email', 'Is Active', 'Created At'
@@ -78,6 +86,10 @@ SHEET_SCHEMAS = {
     'Assignments and Comments': [
         'Comment ID', 'Complaint ID', 'Timestamp', 'Author Name',
         'Author Email', 'Author Role', 'Comment Type', 'Message'
+    ],
+    'Audit_Logs': [
+        'Log ID', 'User ID', 'User Email', 'User Role', 'Action', 'Module', 'Record ID',
+        'Department', 'Details', 'Previous State', 'New State', 'Result', 'IP Address', 'Timestamp'
     ],
     'System_Config': [
         'Key', 'Value', 'Updated_At', 'Updated_By'
@@ -180,6 +192,36 @@ class SheetsDB:
             if comp_first_row and 'From Department' not in comp_first_row:
                 logger.info("Adding 'From Department' canonical header to Complaints sheet...")
                 execute_with_retry(lambda: comp_ws.update_cell(1, len(comp_first_row) + 1, 'From Department'))
+
+        # Ensure 'Custom Permissions' column exists in Users worksheet header
+        if 'Users' in existing_sheets:
+            users_ws = existing_sheets['Users']
+            users_first_row = users_ws.row_values(1)
+            if users_first_row and 'Custom Permissions' not in users_first_row:
+                logger.info("Adding 'Custom Permissions' canonical header to Users sheet...")
+                execute_with_retry(lambda: users_ws.update_cell(1, len(users_first_row) + 1, 'Custom Permissions'))
+
+        # Seed initial system roles if Roles worksheet has no data rows
+        if 'Roles' in existing_sheets:
+            roles_ws = existing_sheets['Roles']
+            roles_rows = roles_ws.get_all_values()
+            if len(roles_rows) <= 1:
+                now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                logger.info("Seeding initial enterprise roles in Roles worksheet...")
+                for role_name in ('Super Admin', 'Admin', 'Department Head', 'Department Staff', 'Viewer', 'User'):
+                    tpl = DEFAULT_ROLE_TEMPLATES[role_name]
+                    perms_str = '*' if role_name == 'Super Admin' else ','.join(tpl['permissions'])
+                    r_row = [
+                        tpl['id'],
+                        tpl['name'],
+                        tpl['description'],
+                        tpl['data_scope'],
+                        perms_str,
+                        'TRUE' if tpl['is_system_role'] else 'FALSE',
+                        now_str,
+                        now_str
+                    ]
+                    roles_ws.append_row(sanitize_row(r_row), value_input_option='USER_ENTERED')
 
         # Seed initial standard complaint types if Complaint_Types worksheet has no data rows
         if 'Complaint_Types' in existing_sheets:
@@ -320,12 +362,26 @@ class SheetsDB:
         )
 
     @classmethod
-    def create_user(cls, full_name, email, password, role='User', department='General'):
-        """Creates a new user with securely hashed password."""
+    def create_user(cls, full_name, email, password, role='User', department='General', custom_permissions=''):
+        """Creates a new user with securely hashed password, department scope, and custom permissions."""
         with cls._db_lock:
             clean_email = email.lower().strip()
             if cls.find_user_by_email(clean_email):
                 raise ValueError(f"User with email '{clean_email}' already exists.")
+
+            all_roles = [r.get('Name') for r in cls.get_all_roles() if r.get('Name')]
+            canon_role = RBACService.canonical_role(role)
+            if canon_role not in all_roles and role.strip() not in all_roles:
+                raise ValueError(f"Invalid role '{role}'. Allowed roles: {', '.join(sorted(set(all_roles)))}")
+
+            if isinstance(department, list):
+                dept_str = ', '.join(d.strip() for d in department if d.strip())
+            else:
+                dept_str = str(department).strip()
+            if not dept_str:
+                dept_str = 'General'
+
+            perms_str = custom_permissions.strip() if isinstance(custom_permissions, str) else ','.join(custom_permissions)
 
             users = cls._read_records('Users', use_cache=False)
             user_num = len(users) + 1
@@ -333,19 +389,24 @@ class SheetsDB:
             pwd_hash = generate_password_hash(password)
             now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-            row = [
-                user_id,
-                full_name.strip(),
-                clean_email,
-                pwd_hash,
-                role,
-                department.strip(),
-                'TRUE',
-                now_str,
-                ''
-            ]
-
             ws = cls._get_worksheet('Users')
+            headers = execute_with_retry(lambda: ws.row_values(1))
+            if not headers:
+                headers = SHEET_SCHEMAS['Users']
+
+            field_map = {
+                'User ID': user_id,
+                'Full Name': full_name.strip(),
+                'Email': clean_email,
+                'Password Hash': pwd_hash,
+                'Role': canon_role,
+                'Department': dept_str,
+                'Is Active': 'TRUE',
+                'Created At': now_str,
+                'Last Login': '',
+                'Custom Permissions': perms_str
+            }
+            row = [field_map.get(h, '') for h in headers]
             execute_with_retry(lambda: ws.append_row(sanitize_row(row), value_input_option='USER_ENTERED'))
             cls._invalidate_cache('Users')
 
@@ -353,10 +414,11 @@ class SheetsDB:
                 'User ID': user_id,
                 'Full Name': full_name.strip(),
                 'Email': clean_email,
-                'Role': role,
-                'Department': department.strip(),
+                'Role': canon_role,
+                'Department': dept_str,
                 'Is Active': 'TRUE',
-                'Created At': now_str
+                'Created At': now_str,
+                'Custom Permissions': perms_str
             }
 
     @classmethod
@@ -386,7 +448,7 @@ class SheetsDB:
         return sum(1 for u in users if u.get('Role') == 'Super Admin' and str(u.get('Is Active', '')).upper() == 'TRUE')
 
     @classmethod
-    def update_user(cls, user_id, full_name=None, email=None, role=None, department=None, is_active=None, new_password=None):
+    def update_user(cls, user_id, full_name=None, email=None, role=None, department=None, is_active=None, new_password=None, custom_permissions=None):
         """
         Updates an existing user's details in the Google Sheets Users worksheet.
         Preserves User ID, Created At, and password hash (unless new_password provided).
@@ -435,13 +497,24 @@ class SheetsDB:
                 current_row[email_idx] = sanitize_cell_value(clean_email)
 
             if role is not None and role.strip():
-                valid_roles = ('Super Admin', 'Admin', 'Support Staff', 'User')
-                if role.strip() not in valid_roles:
-                    raise ValueError(f"Invalid role. Allowed roles: {', '.join(valid_roles)}")
-                current_row[role_idx] = sanitize_cell_value(role.strip())
+                all_roles = [r.get('Name') for r in cls.get_all_roles() if r.get('Name')]
+                canon_role = RBACService.canonical_role(role.strip())
+                if canon_role not in all_roles and role.strip() not in all_roles:
+                    raise ValueError(f"Invalid role '{role}'. Allowed roles: {', '.join(sorted(set(all_roles)))}")
+                current_row[role_idx] = sanitize_cell_value(canon_role)
 
             if department is not None:
-                current_row[dept_idx] = sanitize_cell_value(department.strip() or 'General')
+                if isinstance(department, list):
+                    dept_str = ', '.join(d.strip() for d in department if d.strip())
+                else:
+                    dept_str = str(department).strip()
+                current_row[dept_idx] = sanitize_cell_value(dept_str or 'General')
+
+            if custom_permissions is not None:
+                perm_idx = headers.index('Custom Permissions') if 'Custom Permissions' in headers else -1
+                if perm_idx >= 0:
+                    val = custom_permissions.strip() if isinstance(custom_permissions, str) else ','.join(custom_permissions)
+                    current_row[perm_idx] = sanitize_cell_value(val)
 
             if is_active is not None:
                 val_upper = str(is_active).strip().upper()
@@ -464,6 +537,7 @@ class SheetsDB:
             if clean_email and old_email and clean_email != old_email:
                 cls._cascade_user_email_change(old_email, clean_email)
 
+            cust_perms = current_row[headers.index('Custom Permissions')] if 'Custom Permissions' in headers and len(current_row) > headers.index('Custom Permissions') else ''
             return {
                 'User ID': user_id,
                 'Full Name': current_row[name_idx],
@@ -471,7 +545,8 @@ class SheetsDB:
                 'Role': current_row[role_idx],
                 'Department': current_row[dept_idx],
                 'Is Active': current_row[active_idx],
-                'Created At': current_row[headers.index('Created At')] if 'Created At' in headers else ''
+                'Created At': current_row[headers.index('Created At')] if 'Created At' in headers else '',
+                'Custom Permissions': cust_perms
             }
 
     @classmethod
@@ -860,6 +935,278 @@ class SheetsDB:
     def _rename_department_in_complaints(cls, old_name, new_name):
         """Aliases to _reassign_department_in_complaints."""
         cls._reassign_department_in_complaints(old_name, new_name)
+
+    # =========================================================================
+    # ROLE MANAGEMENT OPERATIONS (RBAC)
+    # =========================================================================
+
+    @classmethod
+    def get_all_roles(cls):
+        """Returns all role configurations (system and custom roles)."""
+        roles = cls._read_records('Roles', use_cache=True)
+        if not roles:
+            return [dict(tpl) for tpl in DEFAULT_ROLE_TEMPLATES.values()]
+        return roles
+
+    @classmethod
+    def get_role_by_id(cls, role_id):
+        if not role_id: return None
+        for r in cls.get_all_roles():
+            if r.get('Role ID', '').strip() == str(role_id).strip():
+                return dict(r)
+        return None
+
+    @classmethod
+    def get_role_by_name(cls, name):
+        if not name: return None
+        canon = RBACService.canonical_role(name)
+        for r in cls.get_all_roles():
+            if r.get('Name', '').strip().lower() == canon.lower():
+                return dict(r)
+        return None
+
+    @classmethod
+    def create_role(cls, name, description='', data_scope='DEPARTMENT', permissions=None, is_system_role=False):
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Role name is required.")
+        if cls.get_role_by_name(clean_name):
+            raise ValueError(f"Role '{clean_name}' already exists.")
+
+        scope_clean = str(data_scope).strip().upper()
+        if scope_clean not in ('ALL', 'DEPARTMENT', 'OWN'):
+            scope_clean = 'DEPARTMENT'
+
+        perms_list = permissions if permissions is not None else []
+        if isinstance(perms_list, str):
+            perms_str = perms_list.strip()
+        else:
+            perms_str = ','.join(p.strip() for p in perms_list if p.strip())
+
+        with cls._db_lock:
+            existing = cls.get_all_roles()
+            role_id = f"ROLE-{len(existing) + 1:03d}"
+            now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+            row = [
+                role_id,
+                clean_name,
+                description.strip(),
+                scope_clean,
+                perms_str,
+                'TRUE' if is_system_role else 'FALSE',
+                now_str,
+                now_str
+            ]
+            ws = cls._get_worksheet('Roles')
+            execute_with_retry(lambda: ws.append_row(sanitize_row(row), value_input_option='USER_ENTERED'))
+            cls._invalidate_cache('Roles')
+
+            return {
+                'Role ID': role_id,
+                'Name': clean_name,
+                'Description': description.strip(),
+                'Data Scope': scope_clean,
+                'Permissions': perms_str,
+                'Is System Role': 'TRUE' if is_system_role else 'FALSE',
+                'Created At': now_str,
+                'Last Updated At': now_str
+            }
+
+    @classmethod
+    def update_role(cls, role_id, name=None, description=None, data_scope=None, permissions=None):
+        with cls._db_lock:
+            ws = cls._get_worksheet('Roles')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            if not rows or len(rows) < 2:
+                raise ValueError(f"Role '{role_id}' not found.")
+
+            headers = [h.strip() for h in rows[0]]
+            id_idx = headers.index('Role ID') if 'Role ID' in headers else 0
+            name_idx = headers.index('Name') if 'Name' in headers else 1
+            desc_idx = headers.index('Description') if 'Description' in headers else 2
+            scope_idx = headers.index('Data Scope') if 'Data Scope' in headers else 3
+            perms_idx = headers.index('Permissions') if 'Permissions' in headers else 4
+            system_idx = headers.index('Is System Role') if 'Is System Role' in headers else 5
+            updated_idx = headers.index('Last Updated At') if 'Last Updated At' in headers else 7
+
+            target_row_idx = None
+            old_name = None
+            is_system = False
+
+            for r_idx, r in enumerate(rows[1:], start=2):
+                if len(r) > id_idx and r[id_idx].strip() == str(role_id).strip():
+                    target_row_idx = r_idx
+                    old_name = r[name_idx].strip() if len(r) > name_idx else ''
+                    is_system = (r[system_idx].strip().upper() == 'TRUE') if len(r) > system_idx else False
+                    break
+
+            if not target_row_idx:
+                raise ValueError(f"Role '{role_id}' not found.")
+
+            current_row = list(rows[target_row_idx - 1])
+            while len(current_row) < len(headers):
+                current_row.append('')
+
+            if name is not None and name.strip():
+                clean_name = name.strip()
+                if is_system and clean_name.lower() != old_name.lower():
+                    raise ValueError(f"System role '{old_name}' cannot be renamed.")
+                for r in rows[1:]:
+                    if r[id_idx].strip() != str(role_id).strip() and r[name_idx].strip().lower() == clean_name.lower():
+                        raise ValueError(f"Another role named '{clean_name}' already exists.")
+                current_row[name_idx] = sanitize_cell_value(clean_name)
+                if old_name and clean_name != old_name:
+                    cls._rename_role_in_users(old_name, clean_name)
+
+            if description is not None:
+                current_row[desc_idx] = sanitize_cell_value(description.strip())
+
+            if data_scope is not None:
+                scope_upper = str(data_scope).strip().upper()
+                if scope_upper in ('ALL', 'DEPARTMENT', 'OWN'):
+                    current_row[scope_idx] = scope_upper
+
+            if permissions is not None:
+                if old_name == 'Super Admin':
+                    current_row[perms_idx] = '*'
+                else:
+                    if isinstance(permissions, str):
+                        current_row[perms_idx] = permissions.strip()
+                    else:
+                        current_row[perms_idx] = ','.join(p.strip() for p in permissions if p.strip())
+
+            now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            current_row[updated_idx] = now_str
+
+            for c_idx, val in enumerate(current_row, start=1):
+                execute_with_retry(lambda ci=c_idx, v=val: ws.update_cell(target_row_idx, ci, sanitize_cell_value(v)))
+
+            cls._invalidate_cache('Roles')
+            return dict(zip(headers, current_row))
+
+    @classmethod
+    def get_role_usage(cls, role_id_or_name):
+        role = cls.get_role_by_id(role_id_or_name) or cls.get_role_by_name(role_id_or_name)
+        if not role:
+            raise ValueError(f"Role '{role_id_or_name}' not found.")
+        target_name = role['Name'].strip().lower()
+        users = cls.get_all_users()
+        linked_users = [u for u in users if (u.get('Role') or '').strip().lower() == target_name]
+        return role, len(linked_users), [u.get('Email') for u in linked_users]
+
+    @classmethod
+    def delete_role(cls, role_id):
+        role = cls.get_role_by_id(role_id)
+        if not role:
+            raise ValueError(f"Role '{role_id}' not found.")
+        if str(role.get('Is System Role', '')).upper() == 'TRUE':
+            raise ValueError(f"Cannot delete system role '{role.get('Name')}'. System roles are permanently protected.")
+
+        role, usage_count, linked_emails = cls.get_role_usage(role_id)
+        if usage_count > 0:
+            raise ValueError(
+                f"Cannot delete role '{role['Name']}': Assigned to {usage_count} user(s) "
+                f"({', '.join(linked_emails[:3])}{'...' if len(linked_emails) > 3 else ''}). "
+                f"Please reassign these users to another role before deleting."
+            )
+
+        with cls._db_lock:
+            ws = cls._get_worksheet('Roles')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            headers = [h.strip() for h in rows[0]]
+            id_idx = headers.index('Role ID') if 'Role ID' in headers else 0
+
+            target_row_idx = None
+            for r_idx, r in enumerate(rows[1:], start=2):
+                if len(r) > id_idx and r[id_idx].strip() == str(role_id).strip():
+                    target_row_idx = r_idx
+                    break
+
+            if not target_row_idx:
+                raise ValueError(f"Role '{role_id}' not found.")
+
+            execute_with_retry(lambda: ws.delete_rows(target_row_idx))
+            cls._invalidate_cache('Roles')
+            return True
+
+    @classmethod
+    def _rename_role_in_users(cls, old_role, new_role):
+        users_ws = cls._get_worksheet('Users')
+        rows = execute_with_retry(lambda: users_ws.get_all_values())
+        if not rows or len(rows) < 2: return
+        headers = [h.strip() for h in rows[0]]
+        role_idx = headers.index('Role') + 1 if 'Role' in headers else 5
+        for r_idx, r in enumerate(rows[1:], start=2):
+            if len(r) >= role_idx and r[role_idx - 1].strip().lower() == old_role.strip().lower():
+                execute_with_retry(lambda ri=r_idx, ri_col=role_idx: users_ws.update_cell(ri, ri_col, sanitize_cell_value(new_role)))
+        cls._invalidate_cache('Users')
+
+    # =========================================================================
+    # AUDIT LOGGING OPERATIONS
+    # =========================================================================
+
+    @classmethod
+    def log_audit_event(
+        cls,
+        user_id='',
+        user_email='',
+        user_role='',
+        action='',
+        module='',
+        record_id='',
+        department='',
+        details='',
+        previous_state='',
+        new_state='',
+        result='SUCCESS',
+        ip_address=''
+    ):
+        """Appends an immutable audit log entry to the Audit_Logs worksheet."""
+        try:
+            now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            log_id = f"LOG-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
+
+            row = [
+                log_id,
+                user_id or '',
+                user_email or '',
+                user_role or '',
+                action or '',
+                module or '',
+                str(record_id or ''),
+                department or '',
+                str(details or ''),
+                str(previous_state or ''),
+                str(new_state or ''),
+                result or 'SUCCESS',
+                ip_address or '',
+                now_str
+            ]
+            ws = cls._get_worksheet('Audit_Logs')
+            execute_with_retry(lambda: ws.append_row(sanitize_row(row), value_input_option='USER_ENTERED'))
+            cls._invalidate_cache('Audit_Logs')
+            return log_id
+        except Exception as e:
+            logger.error(f"Failed to write audit log event: {e}")
+            return None
+
+    @classmethod
+    def get_audit_logs(cls, limit=100, module=None, action=None, user_email=None):
+        """Reads security audit log records, ordered newest first."""
+        records = cls._read_records('Audit_Logs', use_cache=False)
+        filtered = []
+        for r in reversed(records):
+            if module and (r.get('Module') or '').lower() != module.lower():
+                continue
+            if action and (r.get('Action') or '').lower() != action.lower():
+                continue
+            if user_email and (r.get('User Email') or '').lower() != user_email.lower():
+                continue
+            filtered.append(r)
+            if len(filtered) >= limit:
+                break
+        return filtered
 
     # =========================================================================
     # COMPLAINT TYPES MASTER OPERATIONS
@@ -1508,19 +1855,27 @@ class SheetsDB:
         return None
 
     @classmethod
-    def get_complaints_for_user(cls, user_email, role='User'):
+    def get_complaints_for_user(cls, user_email, role='User', user_departments=None, user_dict=None):
         """
-        Returns complaints visible to the user:
-        - Regular User: only complaints where Complainant Email == user_email
-        - Staff / Admin: all complaints
+        Returns complaints visible to the user respecting RBAC:
+        - Super Admin & Admin (ALL scope): All records
+        - Department Head & Staff (DEPARTMENT scope): Records in assigned departments, handled by them, or owned
+        - User (OWN scope): complaints where Complainant Email == user_email
         """
         complaints = cls._read_records('Complaints', use_cache=True)
         normalized = [cls._normalize_complaint_record(c) for c in complaints]
-        if role in ('Super Admin', 'Admin', 'Support Staff'):
-            return list(reversed(normalized))
 
-        clean_email = user_email.lower().strip()
-        filtered = [c for c in normalized if c.get('Complainant Email', '').lower().strip() == clean_email]
+        user = dict(user_dict) if user_dict else {
+            'email': user_email,
+            'role': role,
+            'department': user_departments or ''
+        }
+        try:
+            custom_roles = cls.get_all_roles()
+        except Exception:
+            custom_roles = None
+
+        filtered = RBACService.filter_complaints_by_scope(normalized, user, custom_roles=custom_roles)
         return list(reversed(filtered))
 
     @classmethod
@@ -1879,7 +2234,7 @@ class SheetsDB:
         }
 
     @classmethod
-    def get_comments(cls, complaint_id, user_role='User'):
+    def get_comments(cls, complaint_id, user_role='User', user_dict=None):
         """
         Retrieves comments for a complaint.
         Regular users only see 'Public Update' comments.
@@ -1887,7 +2242,19 @@ class SheetsDB:
         """
         all_comments = cls._read_records('Assignments and Comments', use_cache=True)
         relevant = [c for c in all_comments if c.get('Complaint ID', '').strip() == complaint_id.strip()]
-        if user_role not in ('Super Admin', 'Admin', 'Support Staff'):
+
+        can_view_internal = False
+        canon_role = RBACService.canonical_role(user_dict.get('role') or user_dict.get('Role')) if user_dict else RBACService.canonical_role(user_role)
+        if canon_role in ('Super Admin', 'Admin', 'Department Head', 'Department Staff'):
+            can_view_internal = True
+        elif user_dict:
+            try:
+                custom_roles = cls.get_all_roles()
+            except Exception:
+                custom_roles = None
+            can_view_internal = RBACService.has_permission(user_dict, 'comments:add_internal', custom_roles=custom_roles)
+
+        if not can_view_internal:
             return [c for c in relevant if c.get('Comment Type') != 'Internal Note']
         return relevant
 

@@ -187,6 +187,22 @@
                     </svg>
                     <span>Users & Settings</span>
                 </a>
+                <a href="#roles" class="nav-item super-admin-only" data-view="roles" style="display: none;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    </svg>
+                    <span>Roles &amp; Permissions</span>
+                </a>
+                <a href="#audit-trail" class="nav-item admin-only" data-view="audit-trail" style="display: none;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                        <polyline points="10 9 9 9 8 9"/>
+                    </svg>
+                    <span>Audit Trail</span>
+                </a>
             </nav>
 
             <div class="sidebar-footer">
@@ -1278,6 +1294,145 @@
                     </div>
                 </section>
 
+                <!-- 8. ROLES & PERMISSIONS BUILDER VIEW -->
+                <section id="view-roles" class="view-panel" style="display: none;">
+                    <div class="panel-card" style="margin-bottom: 20px;">
+                        <div class="panel-header" style="flex-wrap: wrap; gap: 12px; align-items: center;">
+                            <div>
+                                <h3 style="margin-bottom: 2px;">Enterprise Role &amp; Permission Builder</h3>
+                                <p class="text-muted" style="font-size: 0.85rem; margin: 0;">Configure roles, assign granular permissions, and restrict data scopes directly persisted to Google Sheets.</p>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="loadRolesData()">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                    Refresh Roles
+                                </button>
+                                <button type="button" class="btn btn-primary btn-sm super-admin-only" onclick="openCreateRoleModal()">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                    Create Custom Role
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- System Role Reference Banner -->
+                        <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 16px; margin-top: 14px; font-size: 0.85rem; display: flex; gap: 20px; flex-wrap: wrap;">
+                            <div><strong>Data Scopes:</strong> <span class="badge" style="background:#e0e7ff;color:#3730a3;">ALL</span> Organization-wide | <span class="badge" style="background:#ecfdf5;color:#065f46;">DEPARTMENT</span> Assigned Department(s) | <span class="badge" style="background:#fef3c7;color:#92400e;">OWN</span> Handled or Lodged only</div>
+                            <div class="text-muted">System default templates: Super Admin, Admin, Department Head, Department Staff, Viewer, User.</div>
+                        </div>
+                    </div>
+
+                    <div class="panel-card">
+                        <div class="table-responsive">
+                            <table class="data-table" id="roles-table">
+                                <thead>
+                                    <tr>
+                                        <th>Role Name</th>
+                                        <th>Role Type</th>
+                                        <th>Data Scope</th>
+                                        <th>Assigned Users</th>
+                                        <th>Permissions Granted</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="roles-table-body">
+                                    <tr>
+                                        <td colspan="6" class="text-center text-muted" style="padding: 24px;">Loading role configurations...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 9. AUDIT TRAIL VIEW -->
+                <section id="view-audit-trail" class="view-panel" style="display: none;">
+                    <div class="panel-card" style="margin-bottom: 20px;">
+                        <div class="panel-header" style="flex-wrap: wrap; gap: 12px; align-items: center;">
+                            <div>
+                                <h3 style="margin-bottom: 2px;">System Security &amp; Audit Trail</h3>
+                                <p class="text-muted" style="font-size: 0.85rem; margin: 0;">Immutable, append-only security logs capturing all administrative and operational transactions.</p>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="loadAuditTrailData()">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                    Refresh
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="exportAuditTrailCsv()">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                    Export CSV
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Audit Filters -->
+                        <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; align-items: flex-end;">
+                            <div class="form-group" style="margin: 0; min-width: 150px; flex: 1;">
+                                <label style="font-size: 0.8rem;">Module</label>
+                                <select id="audit-filter-module" onchange="loadAuditTrailData()" style="padding: 7px 10px; font-size: 0.85rem;">
+                                    <option value="">All Modules</option>
+                                    <option value="Auth">Auth &amp; Session</option>
+                                    <option value="Complaints">Complaints</option>
+                                    <option value="Users">Users</option>
+                                    <option value="Roles">Roles &amp; Permissions</option>
+                                    <option value="Departments">Departments</option>
+                                    <option value="Master Data">Master Data</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin: 0; min-width: 150px; flex: 1;">
+                                <label style="font-size: 0.8rem;">Action</label>
+                                <select id="audit-filter-action" onchange="loadAuditTrailData()" style="padding: 7px 10px; font-size: 0.85rem;">
+                                    <option value="">All Actions</option>
+                                    <option value="LOGIN">LOGIN</option>
+                                    <option value="CREATE">CREATE</option>
+                                    <option value="UPDATE">UPDATE</option>
+                                    <option value="STATUS_CHANGE">STATUS_CHANGE</option>
+                                    <option value="ASSIGN">ASSIGN</option>
+                                    <option value="COMMENT">COMMENT</option>
+                                    <option value="DELETE">DELETE</option>
+                                    <option value="ACCESS_DENIED">ACCESS_DENIED</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin: 0; min-width: 220px; flex: 2;">
+                                <label style="font-size: 0.8rem;">Search Log Text / User / Record ID</label>
+                                <input type="text" id="audit-filter-search" placeholder="Filter by email, ID, or details..." oninput="debounceAuditSearch()" style="padding: 7px 10px; font-size: 0.85rem;">
+                            </div>
+                            <div class="form-group" style="margin: 0; width: 110px;">
+                                <label style="font-size: 0.8rem;">Max Records</label>
+                                <select id="audit-filter-limit" onchange="loadAuditTrailData()" style="padding: 7px 10px; font-size: 0.85rem;">
+                                    <option value="50">50</option>
+                                    <option value="100" selected>100</option>
+                                    <option value="250">250</option>
+                                    <option value="500">500</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="panel-card">
+                        <div class="table-responsive">
+                            <table class="data-table" id="audit-table">
+                                <thead>
+                                    <tr>
+                                        <th style="min-width: 140px;">Timestamp</th>
+                                        <th>User &amp; Role</th>
+                                        <th>Action</th>
+                                        <th>Module</th>
+                                        <th>Record ID</th>
+                                        <th>Department</th>
+                                        <th>Result</th>
+                                        <th style="min-width: 220px;">Details / Changes</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="audit-table-body">
+                                    <tr>
+                                        <td colspan="8" class="text-center text-muted" style="padding: 24px;">Select filters or click Refresh to load audit logs.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
             </main>
         </div>
     </div>
@@ -1738,8 +1893,27 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Department</label>
-                        <select id="modal-user-dept"></select>
+                        <label>Department(s)</label>
+                        <div class="multi-select-container" id="create-user-dept-multi-select">
+                            <button type="button" class="multi-select-toggle" id="create-user-dept-toggle" onclick="toggleMultiSelect('create-user')">
+                                <span class="multi-select-label" id="create-user-dept-label">Select Department(s)...</span>
+                                <span class="multi-select-arrow">&#9662;</span>
+                            </button>
+                            <div class="multi-select-dropdown" id="create-user-dept-dropdown" style="display: none;">
+                                <div class="multi-select-header">
+                                    <input type="text" class="multi-select-search" id="create-user-dept-search" placeholder="Search departments..." oninput="filterMultiSelectOptions('create-user')">
+                                    <div class="multi-select-actions">
+                                        <button type="button" class="btn-link-action" onclick="selectAllDepartments('create-user')">Select All</button>
+                                        <span class="action-sep">|</span>
+                                        <button type="button" class="btn-link-action" onclick="clearAllDepartments('create-user')">Clear All</button>
+                                    </div>
+                                </div>
+                                <div class="multi-select-options" id="create-user-dept-options">
+                                    <div class="text-muted p-2">Loading departments...</div>
+                                </div>
+                            </div>
+                            <input type="hidden" id="modal-user-dept" name="department" value="General">
+                        </div>
                     </div>
                     <div class="form-group">
                         <label>Password <span class="required">*</span></label>
@@ -1778,8 +1952,28 @@
                         <small class="text-muted">Updating email preserves all complaint ownership, audit logs, and assignments.</small>
                     </div>
                     <div class="form-group">
-                        <label>Department <span class="required">*</span></label>
-                        <select id="edit-user-dept" required></select>
+                        <label>Department(s) <span class="required">*</span></label>
+                        <div class="multi-select-container" id="edit-user-dept-multi-select">
+                            <button type="button" class="multi-select-toggle" id="edit-user-dept-toggle" onclick="toggleMultiSelect('edit-user')">
+                                <span class="multi-select-label" id="edit-user-dept-label">Select Department(s)...</span>
+                                <span class="multi-select-arrow">&#9662;</span>
+                            </button>
+                            <div class="multi-select-dropdown" id="edit-user-dept-dropdown" style="display: none;">
+                                <div class="multi-select-header">
+                                    <input type="text" class="multi-select-search" id="edit-user-dept-search" placeholder="Search departments..." oninput="filterMultiSelectOptions('edit-user')">
+                                    <div class="multi-select-actions">
+                                        <button type="button" class="btn-link-action" onclick="selectAllDepartments('edit-user')">Select All</button>
+                                        <span class="action-sep">|</span>
+                                        <button type="button" class="btn-link-action" onclick="clearAllDepartments('edit-user')">Clear All</button>
+                                    </div>
+                                </div>
+                                <div class="multi-select-options" id="edit-user-dept-options">
+                                    <div class="text-muted p-2">Loading departments...</div>
+                                </div>
+                            </div>
+                            <input type="hidden" id="edit-user-dept" name="department" required>
+                        </div>
+                        <small class="text-muted">Users can belong to multiple departments for cross-department oversight.</small>
                     </div>
                     <div class="form-group">
                         <label>Role <span class="required">*</span></label>
@@ -2238,6 +2432,115 @@
                 <button type="button" class="btn btn-secondary" onclick="closeMasterDeleteModal()">Cancel</button>
                 <button type="button" class="btn btn-warning" id="modal-master-deactivate-instead-btn" style="display: none;" onclick="executeDeactivateInstead()">Deactivate Instead</button>
                 <button type="button" class="btn btn-danger" id="modal-master-confirm-delete-btn" style="display: none;" onclick="executeMasterDelete()">Delete Permanently</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ROLE & PERMISSION BUILDER MODAL -->
+    <div id="modal-role-builder" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="modal-role-builder-title">
+        <div class="modal-dialog modal-lg" style="max-width: 850px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h3 id="modal-role-builder-title">Role &amp; Permission Builder</h3>
+                <button type="button" class="btn-close" onclick="closeRoleBuilderModal()" aria-label="Close modal">&times;</button>
+            </div>
+            <form id="form-role-builder" class="modal-form" onsubmit="submitRoleBuilder(event)" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+                <input type="hidden" id="role-builder-mode" value="create">
+                <input type="hidden" id="role-builder-original-id" value="">
+                
+                <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 20px;">
+                    <!-- Template quick-loader -->
+                    <div class="form-row-2" style="background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 16px;">
+                        <div class="form-group" style="margin: 0;">
+                            <label style="font-weight: 600;">Clone from Template / Role:</label>
+                            <select id="role-builder-clone-source" onchange="applyRoleTemplateClone()">
+                                <option value="">-- Choose a template to pre-fill --</option>
+                                <option value="Super Admin">Super Admin (All permissions, ALL scope)</option>
+                                <option value="Admin">Admin (Full operations, ALL scope)</option>
+                                <option value="Department Head">Department Head (Dept operations &amp; staff, DEPARTMENT scope)</option>
+                                <option value="Department Staff">Department Staff (Complaint workflow, DEPARTMENT scope)</option>
+                                <option value="Viewer">Viewer (Read-only, ALL scope)</option>
+                                <option value="User">User (Complainant, OWN scope)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin: 0; display: flex; align-items: flex-end;">
+                            <span class="text-muted" style="font-size: 0.8rem;">Select a template above to quickly populate standard permission sets.</span>
+                        </div>
+                    </div>
+
+                    <div class="form-row-2">
+                        <div class="form-group">
+                            <label>Role Name <span class="required">*</span></label>
+                            <input type="text" id="role-builder-name" required placeholder="e.g. Quality Auditor, Regional Head">
+                            <small class="text-muted" id="role-builder-name-hint">System default role names cannot be renamed.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Data Scope <span class="required">*</span></label>
+                            <select id="role-builder-scope" required>
+                                <option value="ALL">ALL — Organization-wide (All departments &amp; records)</option>
+                                <option value="DEPARTMENT">DEPARTMENT — Assigned department(s) only</option>
+                                <option value="OWN">OWN — Lodged by or directly assigned only</option>
+                            </select>
+                            <small class="text-muted">Controls which complaint records this role can see.</small>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="role-builder-desc" rows="2" placeholder="Describe the purpose and responsibilities of this role..."></textarea>
+                    </div>
+
+                    <div style="margin-top: 18px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                        <h4 style="margin: 0; font-size: 0.95rem; color: #1e3a8a;">Granular Permissions Matrix (28 Permissions)</h4>
+                        <div style="display: flex; gap: 8px;">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setAllPermissions(true)">Select All</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setAllPermissions(false)">Clear All</button>
+                        </div>
+                    </div>
+
+                    <!-- Permissions container dynamically populated -->
+                    <div id="role-builder-permissions-matrix" style="border: 1px solid var(--border); border-radius: 6px; padding: 12px; background: #fafafa;">
+                        <div class="text-muted p-2">Loading permission modules...</div>
+                    </div>
+                </div>
+
+                <div class="modal-footer" style="border-top: 1px solid var(--border); padding: 12px 20px; background: #fff;">
+                    <button type="button" class="btn btn-secondary" onclick="closeRoleBuilderModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="role-builder-submit-btn">Save Role</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ROLE DELETE CONFIRMATION MODAL -->
+    <div id="modal-role-delete" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3 style="color: #ef4444;" id="modal-role-delete-title">Delete Custom Role</h3>
+                <button type="button" class="btn-close" onclick="closeRoleDeleteModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="role-delete-id">
+                <p>Are you sure you want to delete role <strong id="role-delete-name">-</strong>?</p>
+
+                <div id="role-delete-loading" class="text-muted" style="padding: 12px 0;">
+                    Checking active user assignments in Google Sheets...
+                </div>
+
+                <div id="role-delete-blocked" style="display: none;">
+                    <div style="background: #fffbe6; border: 1px solid #ffe58f; padding: 12px 14px; border-radius: 6px; margin: 12px 0; color: #d46b08; font-size: 0.88rem;">
+                        <strong>⚠️ Unsafe Deletion Prevented:</strong> This role is currently assigned to <strong id="role-delete-usage-count">0</strong> user(s). You must reassign those users to another role before deleting.
+                    </div>
+                </div>
+
+                <div id="role-delete-allowed" style="display: none;">
+                    <div style="background: #f6ffed; border: 1px solid #b7eb8f; padding: 12px 14px; border-radius: 6px; margin: 12px 0; color: #389e0d; font-size: 0.88rem;">
+                        ✓ Zero users are assigned to this role. It can be safely removed.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeRoleDeleteModal()">Cancel</button>
+                <button type="button" class="btn btn-danger" id="role-delete-confirm-btn" style="display: none;" onclick="executeRoleDelete()">Delete Role Permanently</button>
             </div>
         </div>
     </div>

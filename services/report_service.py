@@ -24,6 +24,7 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, PageBreak
 )
 from reportlab.pdfgen import canvas
+from services.rbac_service import RBACService
 
 logger = logging.getLogger(__name__)
 
@@ -184,52 +185,13 @@ class ReportService:
         return False
 
     @classmethod
-    def filter_by_rbac(cls, complaints, user):
+    def filter_by_rbac(cls, complaints, user, custom_roles=None):
         """
-        Strict Role-Based Access Control filtering:
-        - Super Admin & Admin: Access all records across all departments.
-        - Support Staff: Access records belonging to their assigned department OR assigned to them.
-        - User: Strictly access ONLY their own submitted records (Complainant Email == user email).
+        Role-Based Access Control filtering delegating to centralized RBACService.
         """
         if not user:
             return []
-
-        role = user.get('role', 'User')
-        user_email = (user.get('email') or '').lower().strip()
-        user_name = (user.get('name') or '').lower().strip()
-        user_dept = (user.get('department') or '').lower().strip()
-
-        if role in ('Super Admin', 'Admin'):
-            return list(complaints)
-
-        if role == 'Support Staff':
-            allowed = []
-            for c in complaints:
-                # 1. Match Handled By name / email
-                handled_by = (c.get('Handled By') or '').lower().strip()
-                if handled_by and (user_name in handled_by or user_email in handled_by):
-                    allowed.append(c)
-                    continue
-
-                # 2. Match department assignment (supporting multi-department values)
-                c_dept_raw = (c.get('Department Name') or c.get('Department') or '').lower()
-                c_depts = [p.strip() for p in c_dept_raw.split(',') if p.strip()]
-                if user_dept and (user_dept in c_depts or any(user_dept in d for d in c_depts)):
-                    allowed.append(c)
-                    continue
-
-                # 3. Match own complaints submitted by this staff member
-                if c.get('Complainant Email', '').lower().strip() == user_email:
-                    allowed.append(c)
-                    continue
-
-            return allowed
-
-        # Regular user: strictly own complaints
-        return [
-            c for c in complaints
-            if c.get('Complainant Email', '').lower().strip() == user_email
-        ]
+        return RBACService.filter_complaints_by_scope(complaints, user, custom_roles=custom_roles)
 
     @classmethod
     def apply_filters(cls, complaints, filters):

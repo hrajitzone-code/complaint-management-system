@@ -2,6 +2,7 @@ import os
 import io
 import time
 import json
+import csv
 import secrets
 import urllib.parse
 import datetime
@@ -33,7 +34,16 @@ from services.auth_service import (
     staff_required,
     admin_required,
     super_admin_required,
-    verify_and_login_user
+    permission_required,
+    record_access_required,
+    verify_and_login_user,
+    refresh_user_session
+)
+from services.rbac_service import (
+    RBACService,
+    ALL_PERMISSIONS,
+    DEFAULT_ROLE_TEMPLATES,
+    ALL_PERMISSION_IDS
 )
 from services.report_service import (
     ReportService,
@@ -669,6 +679,23 @@ def auth_login():
     with _rate_limit_lock:
         _failed_login_attempts.pop(rate_key, None)
 
+    # Log successful login in audit log
+    try:
+        db.log_audit_event(
+            user_id=user_data.get('user_id'),
+            user_email=user_data.get('email'),
+            user_role=user_data.get('role'),
+            action='LOGIN',
+            module='AUTH',
+            record_id=user_data.get('user_id'),
+            department=user_data.get('department'),
+            details='User logged in successfully.',
+            result='SUCCESS',
+            ip_address=client_ip
+        )
+    except Exception as log_err:
+        logger.warning(f"Could not log login audit: {log_err}")
+
     return jsonify({
         'status': 'success',
         'message': f"Welcome back, {user_data['name']}!",
@@ -712,13 +739,47 @@ def auth_register():
 
 @app.route('/api/auth/logout', methods=['POST'])
 def auth_logout():
-    """Terminates session."""
+    """Terminates session and records audit event."""
+    u = get_current_user()
+    if u:
+        try:
+            db = get_db()
+            db.log_audit_event(
+                user_id=u.get('user_id'),
+                user_email=u.get('email'),
+                user_role=u.get('role'),
+                action='LOGOUT',
+                module='AUTH',
+                record_id=u.get('user_id'),
+                department=u.get('department'),
+                details='User logged out.',
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as e:
+            logger.warning(f"Could not log logout audit: {e}")
     session.clear()
     return jsonify({'status': 'success', 'message': 'Logged out successfully.'})
 
+@app.route('/api/auth/refresh_permissions', methods=['POST'])
+@login_required
+def auth_refresh_permissions():
+    """Refreshes current user's session permissions and departments from the database."""
+    u = get_current_user()
+    db = get_db()
+    try:
+        updated_user = refresh_user_session(u['email'], db)
+        return jsonify({
+            'status': 'success',
+            'message': 'Permissions synchronized.',
+            'user': updated_user
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 @app.route('/api/auth/me', methods=['GET'])
 def auth_me():
-    """Returns currently authenticated user."""
+    """Returns currently authenticated user with effective permissions and departments."""
     u = get_current_user()
     if not u:
         return jsonify({'status': 'error', 'message': 'Not authenticated.'}), 401
@@ -778,7 +839,7 @@ def get_department_usage_endpoint(dept_id):
 def create_department():
     """Admin creates a new complaint department."""
     data = request.get_json(silent=True) or request.form or {}
-    name = (data.get('name') or '').strip()
+    name = (data.get('name') or data.get('role_name') or '').strip()
     description = (data.get('description') or '').strip()
     lead_email = (data.get('lead_email') or '').strip()
 
@@ -788,6 +849,23 @@ def create_department():
     db = get_db()
     try:
         dept = db.create_department(name=name, description=description, lead_email=lead_email)
+        try:
+            current_user = get_current_user() or {}
+            db.log_audit_event(
+                user_id=current_user.get('user_id'),
+                user_email=current_user.get('email'),
+                user_role=current_user.get('role'),
+                action='CREATE',
+                module='Departments',
+                record_id=dept.get('Department ID') if isinstance(dept, dict) else '',
+                department=name,
+                details=f"Created department '{name}'.",
+                new_state=json.dumps(dept) if isinstance(dept, dict) else '',
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not log department audit event: {audit_err}")
         return jsonify({'status': 'success', 'message': f"Department '{name}' created.", 'department': dept}), 201
     except ValueError as val_err:
         return jsonify({'status': 'error', 'message': str(val_err)}), 400
@@ -800,7 +878,7 @@ def create_department():
 def update_department_endpoint(dept_id):
     """Admin updates department details."""
     data = request.get_json(silent=True) or request.form or {}
-    name = (data.get('name') or '').strip()
+    name = (data.get('name') or data.get('role_name') or '').strip()
     description = (data.get('description') or '').strip()
     lead_email = (data.get('lead_email') or '').strip()
     is_active = data.get('is_active', 'TRUE')
@@ -934,7 +1012,7 @@ def get_complaint_type_usage_endpoint(type_id):
 def create_complaint_type_endpoint():
     """Admin creates a new complaint type."""
     data = request.get_json(silent=True) or request.form or {}
-    name = (data.get('name') or '').strip()
+    name = (data.get('name') or data.get('role_name') or '').strip()
     description = (data.get('description') or '').strip()
 
     if not name:
@@ -955,7 +1033,7 @@ def create_complaint_type_endpoint():
 def update_complaint_type_endpoint(type_id):
     """Admin updates complaint type details or toggles active status."""
     data = request.get_json(silent=True) or request.form or {}
-    name = (data.get('name') or '').strip()
+    name = (data.get('name') or data.get('role_name') or '').strip()
     description = (data.get('description') or '').strip()
     is_active = data.get('is_active', 'TRUE')
 
@@ -1045,7 +1123,7 @@ def get_salesperson_usage_endpoint(sp_id):
 def create_salesperson_endpoint():
     """Admin creates a new salesperson."""
     data = request.get_json(silent=True) or request.form or {}
-    name = (data.get('name') or '').strip()
+    name = (data.get('name') or data.get('role_name') or '').strip()
     phone = (data.get('phone') or '').strip()
     email = (data.get('email') or '').strip()
 
@@ -1067,7 +1145,7 @@ def create_salesperson_endpoint():
 def update_salesperson_endpoint(sp_id):
     """Admin updates salesperson details or toggles active status."""
     data = request.get_json(silent=True) or request.form or {}
-    name = (data.get('name') or '').strip()
+    name = (data.get('name') or data.get('role_name') or '').strip()
     phone = (data.get('phone') or '').strip()
     email = (data.get('email') or '').strip()
     is_active = data.get('is_active', 'TRUE')
@@ -1230,6 +1308,23 @@ def lodge_complaint():
             complainant_email=user['email']
         )
 
+        try:
+            db.log_audit_event(
+                user_id=user.get('user_id'),
+                user_email=user.get('email'),
+                user_role=user.get('role'),
+                action='COMPLAINT_CREATED',
+                module='COMPLAINTS',
+                record_id=record['Complaint ID'],
+                department=record.get('Department Name'),
+                details=f"Complaint {record['Complaint ID']} created for customer '{customer_name}'.",
+                new_state=json.dumps(record),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not write audit log for complaint creation: {audit_err}")
+
         return jsonify({
             'status': 'success',
             'message': f"Complaint {record['Complaint ID']} lodged successfully! It has been saved in Google Sheets.",
@@ -1250,9 +1345,7 @@ def lodge_complaint():
 def update_complaint_endpoint(complaint_id):
     """
     Updates all 21 complaint fields.
-    Permissions:
-    - Super Admin, Admin, and Support Staff can edit all complaints.
-    - Regular Users can only edit their own complaints if Status is 'Submitted'.
+    Enforces centralized RBAC and record-level authorization.
     """
     user = get_current_user()
     db = get_db()
@@ -1260,17 +1353,14 @@ def update_complaint_endpoint(complaint_id):
     if not c:
         return jsonify({'status': 'error', 'message': f"Complaint '{complaint_id}' not found."}), 404
 
-    is_staff_or_admin = user['role'] in ('Super Admin', 'Admin', 'Support Staff')
-    is_owner = c.get('Complainant Email', '').lower().strip() == user['email'].lower().strip()
+    try:
+        custom_roles = db.get_all_roles()
+    except Exception:
+        custom_roles = None
 
-    if not is_staff_or_admin:
-        if not is_owner:
-            return jsonify({'status': 'error', 'message': 'Access forbidden. You cannot edit complaints lodged by other users.'}), 403
-        if c.get('Status') != 'Submitted':
-            return jsonify({
-                'status': 'error',
-                'message': f"Cannot edit complaint in '{c.get('Status')}' status. Only 'Submitted' complaints can be edited by regular users."
-            }), 403
+    allowed, reason = RBACService.can_access_complaint(user, c, action='edit', custom_roles=custom_roles)
+    if not allowed:
+        return jsonify({'status': 'error', 'message': reason}), 403
 
     if request.is_json:
         raw_data = request.get_json(silent=True) or {}
@@ -1296,6 +1386,24 @@ def update_complaint_endpoint(complaint_id):
 
     try:
         updated = db.update_complaint(complaint_id, raw_data, user)
+        try:
+            db.log_audit_event(
+                user_id=user.get('user_id'),
+                user_email=user.get('email'),
+                user_role=user.get('role'),
+                action='COMPLAINT_UPDATED',
+                module='COMPLAINTS',
+                record_id=complaint_id,
+                department=c.get('Department Name'),
+                details=f"Complaint {complaint_id} updated.",
+                previous_state=json.dumps(c),
+                new_state=json.dumps(updated),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
+
         return jsonify({
             'status': 'success',
             'message': f"Complaint {complaint_id} updated successfully.",
@@ -1309,12 +1417,12 @@ def update_complaint_endpoint(complaint_id):
 
 @app.route('/api/complaints/<complaint_id>', methods=['DELETE'])
 @app.route('/api/complaints/<complaint_id>/delete', methods=['POST'])
-@admin_required
+@login_required
 def delete_complaint_endpoint(complaint_id):
     """
     Deletes a complaint permanently from Google Sheets.
-    Restricted to Super Admin and Admin roles only.
-    Records an audit log entry in Status History before row removal.
+    Enforces RBAC delete permission and record authorization.
+    Records audit log entries in both Status History and Audit_Logs.
     """
     user = get_current_user()
     db = get_db()
@@ -1323,7 +1431,33 @@ def delete_complaint_endpoint(complaint_id):
         return jsonify({'status': 'error', 'message': f"Complaint '{complaint_id}' not found."}), 404
 
     try:
+        custom_roles = db.get_all_roles()
+    except Exception:
+        custom_roles = None
+
+    allowed, reason = RBACService.can_access_complaint(user, c, action='delete', custom_roles=custom_roles)
+    if not allowed:
+        return jsonify({'status': 'error', 'message': reason}), 403
+
+    try:
         db.delete_complaint(complaint_id, user)
+        try:
+            db.log_audit_event(
+                user_id=user.get('user_id'),
+                user_email=user.get('email'),
+                user_role=user.get('role'),
+                action='COMPLAINT_DELETED',
+                module='COMPLAINTS',
+                record_id=complaint_id,
+                department=c.get('Department Name'),
+                details=f"Complaint {complaint_id} permanently deleted.",
+                previous_state=json.dumps(c),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not write audit log: {audit_err}")
+
         return jsonify({
             'status': 'success',
             'message': f"Complaint {complaint_id} has been permanently deleted and logged to the audit trail."
@@ -1336,16 +1470,23 @@ def delete_complaint_endpoint(complaint_id):
 
 @app.route('/api/complaints', methods=['GET'])
 @login_required
+@permission_required('complaints:view')
 def list_complaints():
     """
-    Returns complaints filtered by user access:
-    - Regular Users: strictly only their own complaints.
-    - Staff / Admins: all complaints.
+    Returns complaints filtered by centralized RBAC scope:
+    - Super Admin / Admin: ALL
+    - Department Head / Staff: DEPARTMENT scope
+    - User: OWN scope
     """
     user = get_current_user()
     db = get_db()
     try:
-        complaints = db.get_complaints_for_user(user['email'], user['role'])
+        complaints = db.get_complaints_for_user(
+            user['email'],
+            user['role'],
+            user_departments=user.get('departments'),
+            user_dict=user
+        )
         return jsonify({
             'status': 'success',
             'complaints': complaints,
@@ -1357,10 +1498,11 @@ def list_complaints():
 
 @app.route('/api/complaints/<complaint_id>', methods=['GET'])
 @login_required
+@permission_required('complaints:view')
 def get_complaint_details(complaint_id):
     """
     Retrieves full details, status timeline, and comments for a single complaint.
-    Strictly verifies ownership for regular users (prevents cross-user IDOR access).
+    Strictly verifies record-level RBAC access to prevent IDOR / cross-department direct URL access.
     """
     user = get_current_user()
     db = get_db()
@@ -1369,12 +1511,17 @@ def get_complaint_details(complaint_id):
         if not c:
             return jsonify({'status': 'error', 'message': f"Complaint '{complaint_id}' not found."}), 404
 
-        # Access check: Regular users can ONLY view their own complaints
-        if user['role'] == 'User' and c.get('Complainant Email', '').lower().strip() != user['email'].lower().strip():
-            return jsonify({'status': 'error', 'message': 'Access forbidden. You do not have permission to view this complaint.'}), 403
+        try:
+            custom_roles = db.get_all_roles()
+        except Exception:
+            custom_roles = None
+
+        allowed, reason = RBACService.can_access_complaint(user, c, action='view', custom_roles=custom_roles)
+        if not allowed:
+            return jsonify({'status': 'error', 'message': f"Access forbidden: {reason}"}), 403
 
         history = db.get_status_history(complaint_id)
-        comments = db.get_comments(complaint_id, user_role=user['role'])
+        comments = db.get_comments(complaint_id, user_role=user['role'], user_dict=user)
 
         return jsonify({
             'status': 'success',
@@ -1386,8 +1533,9 @@ def get_complaint_details(complaint_id):
         logger.error(f"Error fetching complaint details: {e}")
         return jsonify({'status': 'error', 'message': f"Failed to read complaint details: {str(e)}"}), 500
 
-@app.route('/api/complaints/<complaint_id>/status', methods=['POST'])
-@staff_required
+@app.route('/api/complaints/<complaint_id>/status', methods=['POST', 'PUT'])
+@login_required
+@permission_required('complaints:change_status')
 def update_status(complaint_id):
     """Staff/Admin updates status of a complaint."""
     user = get_current_user()
@@ -1403,6 +1551,19 @@ def update_status(complaint_id):
         }), 400
 
     db = get_db()
+    c = db.get_complaint_by_id(complaint_id)
+    if not c:
+        return jsonify({'status': 'error', 'message': f"Complaint '{complaint_id}' not found."}), 404
+
+    try:
+        custom_roles = db.get_all_roles()
+    except Exception:
+        custom_roles = None
+
+    allowed, reason = RBACService.can_access_complaint(user, c, action='change_status', custom_roles=custom_roles)
+    if not allowed:
+        return jsonify({'status': 'error', 'message': reason}), 403
+
     try:
         db.update_complaint_status(
             complaint_id=complaint_id,
@@ -1410,6 +1571,24 @@ def update_status(complaint_id):
             changed_by_user=user,
             remarks=remarks
         )
+        try:
+            db.log_audit_event(
+                user_id=user.get('user_id'),
+                user_email=user.get('email'),
+                user_role=user.get('role'),
+                action='STATUS_CHANGED',
+                module='COMPLAINTS',
+                record_id=complaint_id,
+                department=c.get('Department Name'),
+                details=f"Status changed from '{c.get('Status')}' to '{new_status}'. Remarks: {remarks}",
+                previous_state=c.get('Status'),
+                new_state=new_status,
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
+
         return jsonify({
             'status': 'success',
             'message': f"Complaint {complaint_id} status updated to '{new_status}'."
@@ -1421,7 +1600,8 @@ def update_status(complaint_id):
         return jsonify({'status': 'error', 'message': f"Failed to update status in Google Sheets: {str(e)}"}), 500
 
 @app.route('/api/complaints/<complaint_id>/assign', methods=['POST'])
-@staff_required
+@login_required
+@permission_required('complaints:assign')
 def assign_complaint(complaint_id):
     """Staff/Admin assigns a complaint to a support staff member."""
     user = get_current_user()
@@ -1433,6 +1613,19 @@ def assign_complaint(complaint_id):
         return jsonify({'status': 'error', 'message': 'Assignee email is required.'}), 400
 
     db = get_db()
+    c = db.get_complaint_by_id(complaint_id)
+    if not c:
+        return jsonify({'status': 'error', 'message': f"Complaint '{complaint_id}' not found."}), 404
+
+    try:
+        custom_roles = db.get_all_roles()
+    except Exception:
+        custom_roles = None
+
+    allowed, reason = RBACService.can_access_complaint(user, c, action='assign', custom_roles=custom_roles)
+    if not allowed:
+        return jsonify({'status': 'error', 'message': reason}), 403
+
     if not assigned_to_name:
         # Lookup user name from Users database
         assignee = db.find_user_by_email(assigned_to_email)
@@ -1445,6 +1638,22 @@ def assign_complaint(complaint_id):
             assigned_to_email=assigned_to_email,
             assigned_by_user=user
         )
+        try:
+            db.log_audit_event(
+                user_id=user.get('user_id'),
+                user_email=user.get('email'),
+                user_role=user.get('role'),
+                action='COMPLAINT_ASSIGNED',
+                module='COMPLAINTS',
+                record_id=complaint_id,
+                department=c.get('Department Name'),
+                details=f"Assigned to {assigned_to_name} ({assigned_to_email}).",
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
+
         return jsonify({
             'status': 'success',
             'message': f"Complaint {complaint_id} assigned to {assigned_to_name}."
@@ -1457,6 +1666,7 @@ def assign_complaint(complaint_id):
 
 @app.route('/api/complaints/<complaint_id>/comments', methods=['POST'])
 @login_required
+@permission_required('comments:view')
 def add_comment(complaint_id):
     """Adds a comment / note to a complaint."""
     user = get_current_user()
@@ -1467,18 +1677,26 @@ def add_comment(complaint_id):
     if not message:
         return jsonify({'status': 'error', 'message': 'Comment message cannot be empty.'}), 400
 
-    # Regular users can only make Public Updates
-    if user['role'] == 'User':
-        comment_type = 'Public Update'
-
     db = get_db()
-    # Verify complaint exists and user has permission to comment
     c = db.get_complaint_by_id(complaint_id)
     if not c:
         return jsonify({'status': 'error', 'message': f"Complaint '{complaint_id}' not found."}), 404
 
-    if user['role'] == 'User' and c.get('Complainant Email', '').lower().strip() != user['email'].lower().strip():
-        return jsonify({'status': 'error', 'message': 'Access forbidden.'}), 403
+    try:
+        custom_roles = db.get_all_roles()
+    except Exception:
+        custom_roles = None
+
+    allowed, reason = RBACService.can_access_complaint(user, c, action='view', custom_roles=custom_roles)
+    if not allowed:
+        return jsonify({'status': 'error', 'message': reason}), 403
+
+    if comment_type == 'Internal Note':
+        if not RBACService.has_permission(user, 'comments:add_internal', custom_roles=custom_roles):
+            comment_type = 'Public Update'
+    else:
+        if not RBACService.has_permission(user, 'comments:add', custom_roles=custom_roles):
+            return jsonify({'status': 'error', 'message': 'Access forbidden. Permission to add comments required.'}), 403
 
     try:
         new_comment = db.add_comment(
@@ -1489,6 +1707,22 @@ def add_comment(complaint_id):
             comment_type=comment_type,
             message=message
         )
+        try:
+            db.log_audit_event(
+                user_id=user.get('user_id'),
+                user_email=user.get('email'),
+                user_role=user.get('role'),
+                action='COMMENT_ADDED',
+                module='COMMENTS',
+                record_id=complaint_id,
+                department=c.get('Department Name'),
+                details=f"Added {comment_type}: '{message[:40]}...'",
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
+
         return jsonify({
             'status': 'success',
             'message': 'Comment posted successfully.',
@@ -1503,7 +1737,8 @@ def add_comment(complaint_id):
 # =============================================================================
 
 @app.route('/api/users', methods=['GET'])
-@admin_required
+@login_required
+@permission_required('users:view')
 def list_users():
     """Lists all users (excluding password hashes)."""
     db = get_db()
@@ -1515,30 +1750,69 @@ def list_users():
         return jsonify({'status': 'error', 'message': f"Failed to list users: {str(e)}"}), 500
 
 @app.route('/api/users', methods=['POST'])
-@admin_required
+@login_required
+@permission_required('users:create')
 def admin_create_user():
-    """Admin creates a staff member or user."""
+    """Admin / Super Admin creates a staff member or user."""
     data = request.get_json(silent=True) or request.form or {}
     full_name = (data.get('full_name') or '').strip()
     email = (data.get('email') or '').strip().lower()
     password = (data.get('password') or '').strip()
-    role = (data.get('role') or 'Support Staff').strip()
-    department = (data.get('department') or 'General').strip()
+    role = (data.get('role') or 'Department Staff').strip()
 
-    valid_roles = ('Super Admin', 'Admin', 'Support Staff', 'User')
-    if role not in valid_roles:
-        return jsonify({'status': 'error', 'message': f"Invalid role. Allowed roles: {', '.join(valid_roles)}"}), 400
+    raw_dept = data.get('department') or data.get('departments') or 'General'
+    if isinstance(raw_dept, list):
+        department = ', '.join([d.strip() for d in raw_dept if d.strip()])
+    else:
+        department = str(raw_dept).strip()
 
+    custom_permissions = data.get('custom_permissions')
     current_user = get_current_user()
-    if role == 'Super Admin' and current_user.get('role') != 'Super Admin':
-        return jsonify({'status': 'error', 'message': 'Access forbidden. Only Super Admins can create Super Admin accounts.'}), 403
+    db = get_db()
+
+    try:
+        custom_roles = db.get_all_roles()
+    except Exception:
+        custom_roles = None
+
+    role_cfg = RBACService.get_role_template(role, custom_roles=custom_roles)
+    if not role_cfg:
+        return jsonify({'status': 'error', 'message': f"Invalid role '{role}'."}), 400
+
+    # Privilege escalation guard
+    allowed, reason = RBACService.can_assign_role(current_user, role_cfg['name'], custom_roles=custom_roles)
+    if not allowed:
+        return jsonify({'status': 'error', 'message': reason}), 403
 
     if not full_name or not email or not password:
         return jsonify({'status': 'error', 'message': 'Full name, email, and password are required.'}), 400
 
-    db = get_db()
     try:
-        user = db.create_user(full_name=full_name, email=email, password=password, role=role, department=department)
+        user = db.create_user(
+            full_name=full_name,
+            email=email,
+            password=password,
+            role=role_cfg['name'],
+            department=department,
+            custom_permissions=custom_permissions
+        )
+        try:
+            db.log_audit_event(
+                user_id=current_user.get('user_id'),
+                user_email=current_user.get('email'),
+                user_role=current_user.get('role'),
+                action='USER_CREATED',
+                module='USERS',
+                record_id=user.get('User ID'),
+                department=department,
+                details=f"Created user '{full_name}' ({email}) with role '{role_cfg['name']}'.",
+                new_state=json.dumps(user),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record user creation audit: {audit_err}")
+
         return jsonify({'status': 'success', 'message': f"User '{full_name}' created.", 'user': user}), 201
     except ValueError as val_err:
         return jsonify({'status': 'error', 'message': str(val_err)}), 400
@@ -1547,7 +1821,8 @@ def admin_create_user():
         return jsonify({'status': 'error', 'message': f"Failed to create user: {str(e)}"}), 500
 
 @app.route('/api/users/<user_id>', methods=['GET'])
-@admin_required
+@login_required
+@permission_required('users:view')
 def get_user_details(user_id):
     """Retrieves safe user details for editing (excluding password hash)."""
     db = get_db()
@@ -1560,16 +1835,16 @@ def get_user_details(user_id):
 
 @app.route('/api/users/<user_id>', methods=['PUT'])
 @app.route('/api/users/<user_id>/update', methods=['POST'])
-@admin_required
+@login_required
+@permission_required('users:edit')
 def update_user_endpoint(user_id):
     """
     Updates an existing user.
     Enforces RBAC & prevents unauthorized privilege escalation:
     - Super Admin & Admin can edit users.
     - Only Super Admin can edit Super Admin accounts.
-    - Only Super Admin can assign the Super Admin role.
+    - Non-super admins cannot grant permissions or roles they lack.
     - Users cannot deactivate their own active account.
-    - Users cannot remove their own Super Admin role.
     - Cannot deactivate the last remaining active Super Admin.
     - Validates email format and uniqueness.
     - Supports secure password reset without retrieving/exposing existing passwords.
@@ -1584,9 +1859,16 @@ def update_user_endpoint(user_id):
     full_name = (data.get('full_name') or target_user.get('Full Name', '')).strip()
     email = (data.get('email') or target_user.get('Email', '')).strip().lower()
     role = (data.get('role') or target_user.get('Role', 'User')).strip()
-    department = (data.get('department') or target_user.get('Department', 'General')).strip()
+
+    raw_dept = data.get('department') if data.get('department') is not None else (data.get('departments') if data.get('departments') is not None else target_user.get('Department', 'General'))
+    if isinstance(raw_dept, list):
+        department = ', '.join([d.strip() for d in raw_dept if d.strip()])
+    else:
+        department = str(raw_dept).strip()
+
     is_active = data.get('is_active')
     new_password = data.get('new_password') or data.get('password')
+    custom_permissions = data.get('custom_permissions')
 
     # Validations
     if not full_name:
@@ -1596,25 +1878,31 @@ def update_user_endpoint(user_id):
     if '@' not in email or '.' not in email.split('@')[-1]:
         return jsonify({'status': 'error', 'message': 'Please enter a valid email address.'}), 400
 
-    valid_roles = ('Super Admin', 'Admin', 'Support Staff', 'User')
-    if role not in valid_roles:
-        return jsonify({'status': 'error', 'message': f"Invalid role. Allowed roles: {', '.join(valid_roles)}"}), 400
+    try:
+        custom_roles = db.get_all_roles()
+    except Exception:
+        custom_roles = None
+
+    role_cfg = RBACService.get_role_template(role, custom_roles=custom_roles)
+    if not role_cfg:
+        return jsonify({'status': 'error', 'message': f"Invalid role '{role}'."}), 400
 
     # Privilege escalation guards
-    is_current_super = current_user.get('role') == 'Super Admin'
-    target_is_super = target_user.get('Role') == 'Super Admin'
+    is_current_super = RBACService.canonical_role(current_user.get('role')) == 'Super Admin'
+    target_is_super = RBACService.canonical_role(target_user.get('Role')) == 'Super Admin'
 
     if target_is_super and not is_current_super:
         return jsonify({'status': 'error', 'message': 'Access forbidden. Only Super Admins can edit Super Admin accounts.'}), 403
 
-    if role == 'Super Admin' and not is_current_super:
-        return jsonify({'status': 'error', 'message': 'Access forbidden. Only Super Admins can assign the Super Admin role.'}), 403
+    allowed, reason = RBACService.can_assign_role(current_user, role_cfg['name'], custom_roles=custom_roles)
+    if not allowed:
+        return jsonify({'status': 'error', 'message': reason}), 403
 
     # Self-deactivation guard
     if current_user.get('user_id') == user_id:
         if is_active is not None and str(is_active).upper() in ('FALSE', '0', 'NO'):
             return jsonify({'status': 'error', 'message': 'You cannot deactivate your own active account.'}), 400
-        if target_is_super and role != 'Super Admin':
+        if target_is_super and role_cfg['name'] != 'Super Admin':
             return jsonify({'status': 'error', 'message': 'You cannot remove your own Super Admin role.'}), 400
 
     # Last Super Admin deactivation guard
@@ -1633,11 +1921,30 @@ def update_user_endpoint(user_id):
             user_id=user_id,
             full_name=full_name,
             email=email,
-            role=role,
+            role=role_cfg['name'],
             department=department,
             is_active=is_active,
-            new_password=new_password
+            new_password=new_password,
+            custom_permissions=custom_permissions
         )
+
+        try:
+            db.log_audit_event(
+                user_id=current_user.get('user_id'),
+                user_email=current_user.get('email'),
+                user_role=current_user.get('role'),
+                action='USER_UPDATED',
+                module='USERS',
+                record_id=user_id,
+                department=department,
+                details=f"Updated user '{full_name}' ({email}).",
+                previous_state=json.dumps(target_user),
+                new_state=json.dumps(updated),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
 
         # Synchronize active session if current user edited their own details
         if current_user.get('user_id') == user_id:
@@ -1645,6 +1952,8 @@ def update_user_endpoint(user_id):
             current_user['email'] = updated['Email']
             current_user['role'] = updated['Role']
             current_user['department'] = updated['Department']
+            current_user['departments'] = RBACService.get_user_departments(updated)
+            current_user['permissions'] = list(sorted(RBACService.get_effective_permissions(updated, custom_roles=custom_roles)))
             session['user'] = current_user
             session.modified = True
 
@@ -1660,7 +1969,8 @@ def update_user_endpoint(user_id):
         return jsonify({'status': 'error', 'message': f"Failed to update user: {str(e)}"}), 500
 
 @app.route('/api/users/<user_id>/status', methods=['PATCH', 'POST'])
-@admin_required
+@login_required
+@permission_required('users:edit')
 def toggle_user_status(user_id):
     """Activates or deactivates an existing user account."""
     current_user = get_current_user()
@@ -1683,8 +1993,9 @@ def toggle_user_status(user_id):
         return jsonify({'status': 'error', 'message': 'You cannot deactivate your own active account.'}), 400
 
     # Super Admin protection
-    if target_user.get('Role') == 'Super Admin':
-        if current_user.get('role') != 'Super Admin':
+    target_is_super = RBACService.canonical_role(target_user.get('Role')) == 'Super Admin'
+    if target_is_super:
+        if RBACService.canonical_role(current_user.get('role')) != 'Super Admin':
             return jsonify({'status': 'error', 'message': 'Access forbidden. Only Super Admins can alter Super Admin status.'}), 403
         if is_deactivating:
             active_supers = db.count_active_super_admins() if hasattr(db, 'count_active_super_admins') else 1
@@ -1694,6 +2005,24 @@ def toggle_user_status(user_id):
     try:
         updated = db.update_user(user_id=user_id, is_active=new_status)
         status_label = "activated" if str(updated['Is Active']).upper() == 'TRUE' else "deactivated"
+        try:
+            db.log_audit_event(
+                user_id=current_user.get('user_id'),
+                user_email=current_user.get('email'),
+                user_role=current_user.get('role'),
+                action='USER_STATUS_TOGGLED',
+                module='USERS',
+                record_id=user_id,
+                department=target_user.get('Department'),
+                details=f"User '{updated['Full Name']}' status changed to {status_label}.",
+                previous_state=str(target_user.get('Is Active')),
+                new_state=str(updated['Is Active']),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
+
         return jsonify({
             'status': 'success',
             'message': f"User '{updated['Full Name']}' has been {status_label}.",
@@ -1704,7 +2033,8 @@ def toggle_user_status(user_id):
         return jsonify({'status': 'error', 'message': f"Failed to change user status: {str(e)}"}), 500
 
 @app.route('/api/users/<user_id>/usage', methods=['GET'])
-@admin_required
+@login_required
+@permission_required('users:view')
 def get_user_usage_endpoint(user_id):
     """
     Returns activity usage analysis for a user before deletion:
@@ -1742,6 +2072,7 @@ def get_user_usage_endpoint(user_id):
 
 @app.route('/api/users/<user_id>', methods=['DELETE'])
 @app.route('/api/users/<user_id>/delete', methods=['POST'])
+@login_required
 @admin_required
 def delete_user_endpoint(user_id):
     """
@@ -1779,8 +2110,8 @@ def delete_user_endpoint(user_id):
         return jsonify({'status': 'error', 'message': 'You cannot delete or archive your own logged-in account.'}), 400
 
     # Super Admin protection
-    is_current_super = current_user.get('role') == 'Super Admin'
-    target_is_super = target_user.get('Role') == 'Super Admin'
+    is_current_super = RBACService.canonical_role(current_user.get('role')) == 'Super Admin'
+    target_is_super = RBACService.canonical_role(target_user.get('Role')) == 'Super Admin'
 
     if target_is_super and not is_current_super:
         return jsonify({'status': 'error', 'message': 'Access forbidden: Only Super Admins can delete or archive a Super Admin account.'}), 403
@@ -1815,6 +2146,24 @@ def delete_user_endpoint(user_id):
             audit_action = 'USER_ARCHIVED'
             audit_msg = f"Archived user '{target_user.get('Full Name')}' ({user_id}, {target_user.get('Email')}). Reason: {reason}"
             success_msg = f"User '{target_user.get('Full Name')}' has been archived. Login is disabled and records remain preserved."
+
+        # Write audit trail to Audit_Logs
+        try:
+            db.log_audit_event(
+                user_id=current_user.get('user_id'),
+                user_email=current_user.get('email'),
+                user_role=current_user.get('role'),
+                action=audit_action,
+                module='USERS',
+                record_id=user_id,
+                department=target_user.get('Department'),
+                details=audit_msg,
+                previous_state=json.dumps(target_user),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
 
         # Write audit trail to Status History
         try:
@@ -1859,6 +2208,278 @@ def delete_user_endpoint(user_id):
     except Exception as e:
         logger.error(f"Error executing user deletion '{user_id}': {e}")
         return jsonify({'status': 'error', 'message': f"Failed to execute user deletion: {str(e)}"}), 500
+
+# =============================================================================
+# RBAC ROLES, PERMISSIONS & AUDIT LOGS APIS
+# =============================================================================
+
+@app.route('/api/rbac/permissions', methods=['GET'])
+@login_required
+def get_rbac_permissions():
+    """Returns the complete granular permissions taxonomy grouped by category."""
+    categories = {}
+    for p in ALL_PERMISSIONS:
+        cat = p['category']
+        if cat not in categories:
+            categories[cat] = []
+        categories[cat].append(p)
+
+    return jsonify({
+        'status': 'success',
+        'permissions': ALL_PERMISSIONS,
+        'categories': categories,
+        'all_permission_ids': sorted(list(ALL_PERMISSION_IDS))
+    })
+
+@app.route('/api/rbac/roles', methods=['GET'])
+@login_required
+def list_roles():
+    """Lists all configurable roles and system defaults."""
+    db = get_db()
+    try:
+        roles = db.get_all_roles()
+        return jsonify({
+            'status': 'success',
+            'roles': roles,
+            'count': len(roles)
+        })
+    except Exception as e:
+        logger.error(f"Error listing roles: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to list roles: {str(e)}"}), 500
+
+@app.route('/api/rbac/roles/<role_id>', methods=['GET'])
+@login_required
+def get_role_details(role_id):
+    """Retrieves single role definition."""
+    db = get_db()
+    try:
+        r = db.get_role_by_id(role_id)
+        if not r:
+            return jsonify({'status': 'error', 'message': f"Role '{role_id}' not found."}), 404
+        return jsonify({'status': 'success', 'role': r})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/rbac/roles/<role_id>/usage', methods=['GET'])
+@login_required
+@permission_required('roles:view')
+def get_role_usage_endpoint(role_id):
+    """Checks how many users are assigned to a role before deletion."""
+    db = get_db()
+    try:
+        role, count, assigned = db.get_role_usage(role_id)
+        is_sys = str(role.get('Is System Role', 'FALSE')).upper() == 'TRUE'
+        return jsonify({
+            'status': 'success',
+            'role': role,
+            'role_name': role.get('Name', ''),
+            'is_system_role': is_sys,
+            'assigned_user_count': count,
+            'assigned_users': [dict(u) for u in assigned],
+            'can_delete': (not is_sys and count == 0)
+        })
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 404
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/rbac/roles', methods=['POST'])
+@login_required
+@permission_required('roles:create')
+def create_role_endpoint():
+    """Super Admin creates a new custom role."""
+    data = request.get_json(silent=True) or request.form or {}
+    name = (data.get('name') or data.get('role_name') or '').strip()
+    description = (data.get('description') or '').strip()
+    data_scope = (data.get('data_scope') or 'DEPARTMENT').strip().upper()
+    permissions = data.get('permissions') or []
+
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Role Name is required.'}), 400
+
+    if data_scope not in ('ALL', 'DEPARTMENT', 'OWN'):
+        return jsonify({'status': 'error', 'message': 'Data Scope must be one of: ALL, DEPARTMENT, OWN.'}), 400
+
+    current_user = get_current_user()
+    db = get_db()
+    try:
+        new_role = db.create_role(
+            name=name,
+            description=description,
+            data_scope=data_scope,
+            permissions=permissions
+        )
+        try:
+            db.log_audit_event(
+                user_id=current_user.get('user_id'),
+                user_email=current_user.get('email'),
+                user_role=current_user.get('role'),
+                action='ROLE_CREATED',
+                module='RBAC',
+                record_id=new_role.get('Role ID'),
+                department=current_user.get('department'),
+                details=f"Created custom role '{name}' with data scope '{data_scope}'.",
+                new_state=json.dumps(new_role),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
+
+        return jsonify({
+            'status': 'success',
+            'message': f"Role '{name}' created successfully.",
+            'role': new_role
+        }), 201
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 400
+    except Exception as e:
+        logger.error(f"Error creating role: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to create role: {str(e)}"}), 500
+
+@app.route('/api/rbac/roles/<role_id>', methods=['PUT'])
+@login_required
+@permission_required('roles:edit')
+def update_role_endpoint(role_id):
+    """Super Admin updates an existing role configuration."""
+    data = request.get_json(silent=True) or request.form or {}
+    name = data.get('name') or data.get('role_name')
+    description = data.get('description')
+    data_scope = data.get('data_scope')
+    permissions = data.get('permissions')
+
+    current_user = get_current_user()
+    db = get_db()
+    try:
+        old_role = db.get_role_by_id(role_id)
+        if not old_role:
+            return jsonify({'status': 'error', 'message': f"Role '{role_id}' not found."}), 404
+
+        updated = db.update_role(
+            role_id=role_id,
+            name=name,
+            description=description,
+            data_scope=data_scope,
+            permissions=permissions
+        )
+        try:
+            db.log_audit_event(
+                user_id=current_user.get('user_id'),
+                user_email=current_user.get('email'),
+                user_role=current_user.get('role'),
+                action='ROLE_UPDATED',
+                module='RBAC',
+                record_id=role_id,
+                department=current_user.get('department'),
+                details=f"Updated role '{updated.get('Name')}'.",
+                previous_state=json.dumps(old_role),
+                new_state=json.dumps(updated),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
+
+        return jsonify({
+            'status': 'success',
+            'message': f"Role '{updated.get('Name')}' updated successfully.",
+            'role': updated
+        })
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 400
+    except Exception as e:
+        logger.error(f"Error updating role {role_id}: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to update role: {str(e)}"}), 500
+
+@app.route('/api/rbac/roles/<role_id>', methods=['DELETE'])
+@app.route('/api/rbac/roles/<role_id>/delete', methods=['POST'])
+@login_required
+@permission_required('roles:delete')
+def delete_role_endpoint(role_id):
+    """Super Admin deletes a non-system role after verifying no users are assigned."""
+    current_user = get_current_user()
+    db = get_db()
+    try:
+        old_role = db.get_role_by_id(role_id)
+        if not old_role:
+            return jsonify({'status': 'error', 'message': f"Role '{role_id}' not found."}), 404
+
+        db.delete_role(role_id)
+        try:
+            db.log_audit_event(
+                user_id=current_user.get('user_id'),
+                user_email=current_user.get('email'),
+                user_role=current_user.get('role'),
+                action='ROLE_DELETED',
+                module='RBAC',
+                record_id=role_id,
+                department=current_user.get('department'),
+                details=f"Deleted custom role '{old_role.get('Name')}'.",
+                previous_state=json.dumps(old_role),
+                result='SUCCESS',
+                ip_address=request.remote_addr or ''
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log: {audit_err}")
+
+        return jsonify({
+            'status': 'success',
+            'message': f"Role '{old_role.get('Name')}' deleted successfully."
+        })
+    except ValueError as val_err:
+        return jsonify({'status': 'error', 'message': str(val_err)}), 409
+    except Exception as e:
+        logger.error(f"Error deleting role {role_id}: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to delete role: {str(e)}"}), 500
+
+@app.route('/api/rbac/audit-logs', methods=['GET'])
+@login_required
+@permission_required('audit_logs:view')
+def get_audit_logs_endpoint():
+    """Super Admin reviews security and operation audit trail logs."""
+    limit = int(request.args.get('limit', 100))
+    module = request.args.get('module')
+    action = request.args.get('action')
+    user_email = request.args.get('user_email')
+
+    db = get_db()
+    try:
+        logs = db.get_audit_logs(limit=limit, module=module, action=action, user_email=user_email)
+        return jsonify({
+            'status': 'success',
+            'logs': logs,
+            'count': len(logs)
+        })
+    except Exception as e:
+        logger.error(f"Error fetching audit logs: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to fetch audit logs: {str(e)}"}), 500
+
+@app.route('/api/rbac/audit-logs/export', methods=['GET'])
+@login_required
+@permission_required('audit_logs:export')
+def export_audit_logs_csv():
+    """Exports audit logs to CSV."""
+    db = get_db()
+    try:
+        logs = db.get_audit_logs(limit=1000)
+        output = io.StringIO()
+        fieldnames = ['Log ID', 'Timestamp', 'User Email', 'User Role', 'Action', 'Module', 'Record ID', 'Department', 'Details', 'Result', 'IP Address']
+        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+        for l in logs:
+            writer.writerow(l)
+
+        csv_bytes = output.getvalue().encode('utf-8')
+        timestamp_str = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        return send_file(
+            io.BytesIO(csv_bytes),
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=f"audit_logs_{timestamp_str}.csv"
+        )
+    except Exception as e:
+        logger.error(f"Error exporting audit logs: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to export audit logs: {str(e)}"}), 500
 
 # =============================================================================
 # REPORTS & ANALYTICS APIS
@@ -2062,7 +2683,7 @@ def export_reports(export_format):
             )
             return send_file(
                 io.BytesIO(csv_bytes),
-                mimetype='text/csv; charset=utf-8',
+                mimetype='text/csv',
                 as_attachment=True,
                 download_name=f"complaints_report_{timestamp_str}.csv"
             )

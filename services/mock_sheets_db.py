@@ -10,6 +10,11 @@ from services.crypto_utils import (
     decrypt_secret,
     mask_secret
 )
+from services.rbac_service import (
+    RBACService,
+    DEFAULT_ROLE_TEMPLATES,
+    ALL_PERMISSION_IDS
+)
 
 DEFAULT_DEPARTMENTS = [
     ('IT & Technical Support', 'Hardware, software, network, email, and systems assistance.'),
@@ -32,12 +37,14 @@ class MockSheetsDB:
         'Salespersons': [],
         'Status History': [],
         'Assignments and Comments': [],
-        'System_Config': []
+        'System_Config': [],
+        'Roles': [],
+        'Audit_Logs': []
     }
 
     @classmethod
     def reset(cls):
-        """Resets in-memory store to clean initial state with bootstrap admin and departments."""
+        """Resets in-memory store to clean initial state with bootstrap admin, roles, and departments."""
         cls._store = {
             'Complaints': [],
             'Users': [],
@@ -46,11 +53,25 @@ class MockSheetsDB:
             'Salespersons': [],
             'Status History': [],
             'Assignments and Comments': [],
-            'System_Config': []
+            'System_Config': [],
+            'Roles': [],
+            'Audit_Logs': []
         }
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        # Bootstrap system default roles
+        for rname, rtmpl in DEFAULT_ROLE_TEMPLATES.items():
+            cls._store['Roles'].append({
+                'Role ID': rtmpl['id'],
+                'Name': rtmpl['name'],
+                'Description': rtmpl['description'],
+                'Data Scope': rtmpl['data_scope'],
+                'Permissions': ','.join(rtmpl['permissions']),
+                'Is System Role': 'TRUE' if rtmpl.get('is_system_role') else 'FALSE',
+                'Created At': now_str
+            })
+
         # Bootstrap default admin if configured in environment
         if Config.INITIAL_ADMIN_PASSWORD:
-            now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
             cls._store['Users'].append({
                 'User ID': 'USR-0001',
                 'Full Name': Config.INITIAL_ADMIN_NAME,
@@ -60,7 +81,8 @@ class MockSheetsDB:
                 'Department': 'Management',
                 'Is Active': 'TRUE',
                 'Created At': now_str,
-                'Last Login': ''
+                'Last Login': '',
+                'Custom Permissions': ''
             })
         # Bootstrap default departments
         now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
@@ -161,10 +183,20 @@ class MockSheetsDB:
         return users
 
     @classmethod
-    def create_user(cls, full_name, email, password, role='User', department='General'):
+    def create_user(cls, full_name, email, password, role='User', department='General', custom_permissions=None):
         clean_email = email.lower().strip()
         if cls.find_user_by_email(clean_email):
             raise ValueError(f"User with email '{clean_email}' already exists.")
+
+        canon_role = RBACService.canonical_role(role)
+        all_roles = cls.get_all_roles()
+        role_names = [r['Name'].strip().lower() for r in all_roles]
+        if canon_role.lower() not in role_names and canon_role.lower() not in [r.lower() for r in DEFAULT_ROLE_TEMPLATES.keys()]:
+            raise ValueError(f"Invalid role '{role}'.")
+
+        dept_val = ', '.join([d.strip() for d in department if d.strip()]) if isinstance(department, list) else (department.strip() if department else 'General')
+        cust_perms_str = ', '.join([p.strip() for p in custom_permissions if p.strip()]) if isinstance(custom_permissions, list) else (str(custom_permissions).strip() if custom_permissions else '')
+
         user_num = len(cls._store['Users']) + 1
         user_id = f"USR-{user_num:04d}"
         now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
@@ -173,11 +205,12 @@ class MockSheetsDB:
             'Full Name': full_name.strip(),
             'Email': clean_email,
             'Password Hash': generate_password_hash(password),
-            'Role': role,
-            'Department': department.strip(),
+            'Role': canon_role,
+            'Department': dept_val,
             'Is Active': 'TRUE',
             'Created At': now_str,
-            'Last Login': ''
+            'Last Login': '',
+            'Custom Permissions': cust_perms_str
         }
         cls._store['Users'].append(record)
         safe = dict(record)
@@ -198,7 +231,7 @@ class MockSheetsDB:
         return sum(1 for u in cls._store['Users'] if u.get('Role') == 'Super Admin' and str(u.get('Is Active', '')).upper() == 'TRUE')
 
     @classmethod
-    def update_user(cls, user_id, full_name=None, email=None, role=None, department=None, is_active=None, new_password=None):
+    def update_user(cls, user_id, full_name=None, email=None, role=None, department=None, is_active=None, new_password=None, custom_permissions=None):
         user = None
         old_email = None
         clean_email = email.lower().strip() if email else None
@@ -218,12 +251,17 @@ class MockSheetsDB:
         if clean_email:
             user['Email'] = clean_email
         if role is not None and role.strip():
-            valid_roles = ('Super Admin', 'Admin', 'Support Staff', 'User')
-            if role.strip() not in valid_roles:
-                raise ValueError(f"Invalid role. Allowed roles: {', '.join(valid_roles)}")
-            user['Role'] = role.strip()
+            canon_role = RBACService.canonical_role(role)
+            all_roles = cls.get_all_roles()
+            role_names = [r['Name'].strip().lower() for r in all_roles]
+            if canon_role.lower() not in role_names and canon_role.lower() not in [r.lower() for r in DEFAULT_ROLE_TEMPLATES.keys()]:
+                raise ValueError(f"Invalid role '{role}'.")
+            user['Role'] = canon_role
         if department is not None:
-            user['Department'] = department.strip() or 'General'
+            dept_val = ', '.join([d.strip() for d in department if d.strip()]) if isinstance(department, list) else (department.strip() if department else 'General')
+            user['Department'] = dept_val
+        if custom_permissions is not None:
+            user['Custom Permissions'] = ', '.join([p.strip() for p in custom_permissions if p.strip()]) if isinstance(custom_permissions, list) else str(custom_permissions).strip()
         if is_active is not None:
             val_upper = str(is_active).strip().upper()
             if val_upper in ('ARCHIVED', 'ARCHIVE'):
@@ -303,6 +341,214 @@ class MockSheetsDB:
                 del cls._store['Users'][i]
                 return True
         raise ValueError(f"User '{user_id}' not found.")
+
+    # =========================================================================
+    # ROLE MANAGEMENT (MOCK)
+    # =========================================================================
+
+    @classmethod
+    def get_all_roles(cls):
+        """Returns all role configurations from the in-memory Roles store."""
+        roles = []
+        for r in cls._store.get('Roles', []):
+            rcopy = dict(r)
+            perms_raw = rcopy.get('Permissions', '')
+            if isinstance(perms_raw, str):
+                rcopy['Permissions'] = [p.strip() for p in perms_raw.split(',') if p.strip()]
+            roles.append(rcopy)
+        return roles
+
+    @classmethod
+    def get_role_by_id(cls, role_id):
+        if not role_id:
+            return None
+        target = str(role_id).strip()
+        for r in cls.get_all_roles():
+            if str(r.get('Role ID', '')).strip() == target:
+                return r
+        return None
+
+    @classmethod
+    def get_role_by_name(cls, name):
+        if not name:
+            return None
+        target = str(name).strip().lower()
+        for r in cls.get_all_roles():
+            if str(r.get('Name', '')).strip().lower() == target:
+                return r
+        return None
+
+    @classmethod
+    def create_role(cls, name, description='', data_scope='DEPARTMENT', permissions=None):
+        clean_name = str(name).strip()
+        if not clean_name:
+            raise ValueError("Role name is required.")
+
+        if cls.get_role_by_name(clean_name):
+            raise ValueError(f"Role '{clean_name}' already exists.")
+
+        scope_val = str(data_scope or 'DEPARTMENT').strip().upper()
+        if scope_val not in ('ALL', 'DEPARTMENT', 'OWN'):
+            scope_val = 'DEPARTMENT'
+
+        perms_list = [p.strip() for p in permissions if p.strip()] if isinstance(permissions, list) else ([p.strip() for p in str(permissions).split(',') if p.strip()] if permissions else [])
+        perms_str = ', '.join(sorted(set(perms_list)))
+
+        role_num = len(cls._store.get('Roles', [])) + 1
+        role_id = f"ROLE-{role_num:03d}"
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+        record = {
+            'Role ID': role_id,
+            'Name': clean_name,
+            'Description': str(description or '').strip(),
+            'Data Scope': scope_val,
+            'Permissions': perms_str,
+            'Is System Role': 'FALSE',
+            'Created At': now_str
+        }
+        cls._store['Roles'].append(record)
+        return {
+            'Role ID': role_id,
+            'Name': clean_name,
+            'Description': record['Description'],
+            'Data Scope': scope_val,
+            'Permissions': [p.strip() for p in perms_str.split(',') if p.strip()],
+            'Is System Role': 'FALSE',
+            'Created At': now_str
+        }
+
+    @classmethod
+    def update_role(cls, role_id, name=None, description=None, data_scope=None, permissions=None):
+        role_record = None
+        for r in cls._store.get('Roles', []):
+            if r.get('Role ID', '').strip() == str(role_id).strip():
+                role_record = r
+                break
+
+        if not role_record:
+            raise ValueError(f"Role '{role_id}' not found.")
+
+        is_sys = str(role_record.get('Is System Role', 'FALSE')).upper() == 'TRUE'
+        old_name = role_record.get('Name', '').strip()
+
+        if name is not None and name.strip():
+            clean_name = name.strip()
+            if is_sys and clean_name.lower() != old_name.lower():
+                raise ValueError("System role names cannot be renamed.")
+            if clean_name.lower() != old_name.lower():
+                existing = cls.get_role_by_name(clean_name)
+                if existing and existing.get('Role ID') != role_id:
+                    raise ValueError(f"Role name '{clean_name}' already exists.")
+                role_record['Name'] = clean_name
+                cls._rename_role_in_users(old_name, clean_name)
+
+        if description is not None:
+            role_record['Description'] = str(description).strip()
+
+        if data_scope is not None:
+            if is_sys and old_name == 'Super Admin' and str(data_scope).strip().upper() != 'ALL':
+                raise ValueError("Super Admin data scope cannot be changed from ALL.")
+            scope_val = str(data_scope).strip().upper()
+            if scope_val in ('ALL', 'DEPARTMENT', 'OWN'):
+                role_record['Data Scope'] = scope_val
+
+        if permissions is not None:
+            if is_sys and old_name == 'Super Admin':
+                pass  # Super admin keeps all
+            else:
+                perms_list = [p.strip() for p in permissions if p.strip()] if isinstance(permissions, list) else ([p.strip() for p in str(permissions).split(',') if p.strip()] if permissions else [])
+                role_record['Permissions'] = ', '.join(sorted(set(perms_list)))
+
+        perms_raw = role_record.get('Permissions', '')
+        return {
+            'Role ID': role_record['Role ID'],
+            'Name': role_record['Name'],
+            'Description': role_record.get('Description', ''),
+            'Data Scope': role_record.get('Data Scope', 'DEPARTMENT'),
+            'Permissions': [p.strip() for p in perms_raw.split(',') if p.strip()] if isinstance(perms_raw, str) else list(perms_raw),
+            'Is System Role': role_record.get('Is System Role', 'FALSE'),
+            'Created At': role_record.get('Created At', '')
+        }
+
+    @classmethod
+    def get_role_usage(cls, role_id_or_name):
+        role = cls.get_role_by_id(role_id_or_name) or cls.get_role_by_name(role_id_or_name)
+        if not role:
+            raise ValueError(f"Role '{role_id_or_name}' not found.")
+        target_name = role['Name'].strip().lower()
+        users = cls.get_all_users()
+        assigned_users = [u for u in users if (u.get('Role') or '').strip().lower() == target_name]
+        return role, len(assigned_users), assigned_users
+
+    @classmethod
+    def delete_role(cls, role_id):
+        role, usage_count, assigned_users = cls.get_role_usage(role_id)
+        if str(role.get('Is System Role', 'FALSE')).upper() == 'TRUE':
+            raise ValueError(f"Cannot delete system default role '{role['Name']}'.")
+        if usage_count > 0:
+            user_list_str = ', '.join([u.get('Email', '') for u in assigned_users[:3]])
+            raise ValueError(f"Cannot delete role '{role['Name']}': It is currently assigned to {usage_count} user(s) ({user_list_str}). Reassign users first.")
+
+        idx_to_remove = None
+        for idx, r in enumerate(cls._store.get('Roles', [])):
+            if r.get('Role ID', '').strip() == str(role_id).strip():
+                idx_to_remove = idx
+                break
+        if idx_to_remove is not None:
+            del cls._store['Roles'][idx_to_remove]
+            return True
+        raise ValueError(f"Role '{role_id}' not found.")
+
+    @classmethod
+    def _rename_role_in_users(cls, old_name, new_name):
+        target = old_name.strip().lower()
+        for u in cls._store.get('Users', []):
+            if (u.get('Role') or '').strip().lower() == target:
+                u['Role'] = new_name
+
+    # =========================================================================
+    # AUDIT LOGGING (MOCK)
+    # =========================================================================
+
+    @classmethod
+    def log_audit_event(cls, user_id='', user_email='', user_role='', action='', module='', record_id='', department='', details='', previous_state='', new_state='', result='SUCCESS', ip_address=''):
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        log_id = f"LOG-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
+        entry = {
+            'Log ID': log_id,
+            'User ID': user_id or '',
+            'User Email': user_email or '',
+            'User Role': user_role or '',
+            'Action': action or '',
+            'Module': module or '',
+            'Record ID': str(record_id or ''),
+            'Department': department or '',
+            'Details': str(details or ''),
+            'Previous State': str(previous_state or ''),
+            'New State': str(new_state or ''),
+            'Result': result or 'SUCCESS',
+            'IP Address': ip_address or '',
+            'Timestamp': now_str
+        }
+        cls._store['Audit_Logs'].append(entry)
+        return log_id
+
+    @classmethod
+    def get_audit_logs(cls, limit=100, module=None, action=None, user_email=None):
+        logs = list(reversed(cls._store.get('Audit_Logs', [])))
+        filtered = []
+        for l in logs:
+            if module and (l.get('Module') or '').lower() != module.lower():
+                continue
+            if action and (l.get('Action') or '').lower() != action.lower():
+                continue
+            if user_email and (l.get('User Email') or '').lower() != user_email.lower():
+                continue
+            filtered.append(dict(l))
+            if len(filtered) >= limit:
+                break
+        return filtered
 
     @classmethod
     def get_all_departments(cls, include_inactive=False):
@@ -823,12 +1069,15 @@ class MockSheetsDB:
         return None
 
     @classmethod
-    def get_complaints_for_user(cls, user_email, role='User'):
+    def get_complaints_for_user(cls, user_email, role='User', user_departments=None, user_dict=None):
         normalized = [cls._normalize_complaint_record(c) for c in cls._store['Complaints']]
-        if role in ('Super Admin', 'Admin', 'Support Staff'):
-            return list(reversed(normalized))
-        clean_email = user_email.lower().strip()
-        filtered = [c for c in normalized if c.get('Complainant Email', '').lower().strip() == clean_email]
+        user = dict(user_dict) if user_dict else {
+            'email': user_email,
+            'role': role,
+            'department': user_departments or ''
+        }
+        custom_roles = cls.get_all_roles()
+        filtered = RBACService.filter_complaints_by_scope(normalized, user, custom_roles=custom_roles)
         return list(reversed(filtered))
 
     @classmethod
@@ -1016,9 +1265,17 @@ class MockSheetsDB:
         return dict(record)
 
     @classmethod
-    def get_comments(cls, complaint_id, user_role='User'):
+    def get_comments(cls, complaint_id, user_role='User', user_dict=None):
         all_c = [dict(c) for c in cls._store['Assignments and Comments'] if c.get('Complaint ID', '').strip() == complaint_id.strip()]
-        if user_role not in ('Super Admin', 'Admin', 'Support Staff'):
+        can_view_internal = False
+        canon_role = RBACService.canonical_role(user_dict.get('role') or user_dict.get('Role')) if user_dict else RBACService.canonical_role(user_role)
+        if canon_role in ('Super Admin', 'Admin', 'Department Head', 'Department Staff'):
+            can_view_internal = True
+        elif user_dict:
+            custom_roles = cls.get_all_roles()
+            can_view_internal = RBACService.has_permission(user_dict, 'comments:add_internal', custom_roles=custom_roles)
+
+        if not can_view_internal:
             return [c for c in all_c if c.get('Comment Type') != 'Internal Note']
         return all_c
 

@@ -8,6 +8,18 @@ let allStaffUsers = [];
 let allComplaintsCache = [];
 let activeComplaintId = null;
 let driveDiagnostic = null;
+let allRolesCache = [];
+let allPermissionsCache = [];
+let auditTrailCache = [];
+let auditSearchDebounceTimer = null;
+
+function hasPermission(permissionId) {
+    if (!currentUser) return false;
+    if (currentUser.role === 'Super Admin') return true;
+    const perms = currentUser.permissions || [];
+    if (perms.includes('*') || perms.includes(permissionId)) return true;
+    return false;
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     initApp();
@@ -161,6 +173,8 @@ function setupEventListeners() {
                 else if (modal.id === 'modal-master-delete') closeMasterDeleteModal();
                 else if (modal.id === 'configure-oauth-modal') closeConfigureOAuthModal();
                 else if (modal.id === 'printable-report-modal') closePrintableReportModal();
+                else if (modal.id === 'modal-role-builder') closeRoleBuilderModal();
+                else if (modal.id === 'modal-role-delete') closeRoleDeleteModal();
             }
         });
     });
@@ -228,6 +242,16 @@ function setupEventListeners() {
                 closeMasterDeleteModal();
                 return;
             }
+            const roleBuilderModal = document.getElementById('modal-role-builder');
+            if (roleBuilderModal && roleBuilderModal.style.display && roleBuilderModal.style.display !== 'none') {
+                closeRoleBuilderModal();
+                return;
+            }
+            const roleDeleteModal = document.getElementById('modal-role-delete');
+            if (roleDeleteModal && roleDeleteModal.style.display && roleDeleteModal.style.display !== 'none') {
+                closeRoleDeleteModal();
+                return;
+            }
         }
     });
 }
@@ -241,15 +265,17 @@ function switchView(viewName) {
     if (currentUser) {
         const isStaffOrAdmin = ['Super Admin', 'Admin', 'Support Staff'].includes(currentUser.role);
         const isAdmin = ['Super Admin', 'Admin'].includes(currentUser.role);
-        if (viewName === 'manage' && !isStaffOrAdmin) {
-            viewName = 'dashboard';
-        }
-        if (viewName === 'settings' && !isAdmin) {
-            viewName = 'dashboard';
-        }
-        if (viewName === 'master-data' && !isAdmin) {
-            viewName = 'dashboard';
-        }
+        const canManage = hasPermission('complaints:update_status') || hasPermission('complaints:assign') || ['Super Admin', 'Admin', 'Department Head', 'Department Staff', 'Support Staff'].includes(currentUser.role);
+        const canSettings = hasPermission('users:view') || ['Super Admin', 'Admin'].includes(currentUser.role);
+        const canMaster = hasPermission('master_data:view') || ['Super Admin', 'Admin'].includes(currentUser.role);
+        const canRoles = hasPermission('roles:view') || currentUser.role === 'Super Admin';
+        const canAudit = hasPermission('audit_logs:view') || ['Super Admin', 'Admin'].includes(currentUser.role);
+
+        if (viewName === 'manage' && !canManage) viewName = 'dashboard';
+        if (viewName === 'settings' && !canSettings) viewName = 'dashboard';
+        if (viewName === 'master-data' && !canMaster) viewName = 'dashboard';
+        if (viewName === 'roles' && !canRoles) viewName = 'dashboard';
+        if (viewName === 'audit-trail' && !canAudit) viewName = 'dashboard';
     }
     window.location.hash = viewName;
     document.querySelectorAll('.view-panel').forEach(panel => panel.style.display = 'none');
@@ -270,7 +296,9 @@ function switchView(viewName) {
             'reports': 'Reports & Analytics Hub',
             'manage': 'Staff Workspace — Manage Complaints',
             'settings': 'Users & System Settings',
-            'master-data': 'Master Data Management'
+            'master-data': 'Master Data Management',
+            'roles': 'Roles & Permissions Builder',
+            'audit-trail': 'System Security & Audit Trail'
         };
         document.getElementById('page-heading').textContent = headings[viewName] || 'Complaint System';
 
@@ -297,6 +325,8 @@ function switchView(viewName) {
         if (viewName === 'manage') loadManageComplaints();
         if (viewName === 'settings') loadSettingsData();
         if (viewName === 'master-data') loadMasterData();
+        if (viewName === 'roles') loadRolesData();
+        if (viewName === 'audit-trail') loadAuditTrailData();
     }
 }
 
@@ -400,12 +430,27 @@ function renderUserInterface() {
     document.getElementById('user-display-name').textContent = currentUser.name;
     document.getElementById('user-display-role').textContent = currentUser.role;
 
-    // RBAC Nav Visibility
-    const isStaffOrAdmin = ['Super Admin', 'Admin', 'Support Staff'].includes(currentUser.role);
-    const isAdmin = ['Super Admin', 'Admin'].includes(currentUser.role);
+    // Granular RBAC Nav Visibility
+    const isSuperAdmin = currentUser.role === 'Super Admin';
+    const canManageComplaints = hasPermission('complaints:update_status') || hasPermission('complaints:assign') || ['Super Admin', 'Admin', 'Department Head', 'Department Staff', 'Support Staff'].includes(currentUser.role);
+    const canAdmin = isSuperAdmin || hasPermission('users:view') || hasPermission('settings:view') || ['Super Admin', 'Admin'].includes(currentUser.role);
+    const canRoles = isSuperAdmin || hasPermission('roles:view');
+    const canAudit = hasPermission('audit_logs:view') || isSuperAdmin || currentUser.role === 'Admin';
+    const canMaster = hasPermission('master_data:view') || isSuperAdmin || currentUser.role === 'Admin';
 
-    document.querySelectorAll('.staff-only').forEach(el => el.style.display = isStaffOrAdmin ? 'block' : 'none');
-    document.querySelectorAll('.admin-only').forEach(el => el.style.display = isAdmin ? 'block' : 'none');
+    document.querySelectorAll('.staff-only').forEach(el => el.style.display = canManageComplaints ? 'block' : 'none');
+    document.querySelectorAll('.admin-only').forEach(el => el.style.display = canAdmin ? 'block' : 'none');
+    document.querySelectorAll('.super-admin-only').forEach(el => el.style.display = isSuperAdmin ? 'block' : 'none');
+
+    // Individual Nav Links
+    const rolesNav = document.querySelector('.nav-item[data-view="roles"]');
+    if (rolesNav) rolesNav.style.display = canRoles ? 'block' : 'none';
+
+    const auditNav = document.querySelector('.nav-item[data-view="audit-trail"]');
+    if (auditNav) auditNav.style.display = canAudit ? 'block' : 'none';
+
+    const masterNav = document.querySelector('.nav-item[data-view="master-data"]');
+    if (masterNav) masterNav.style.display = canMaster ? 'block' : 'none';
 }
 
 async function handleLogin(e) {
@@ -977,7 +1022,11 @@ function filterMultiSelectOptions(prefix) {
 
 function onDeptCheckboxChange(prefix) {
     const container = document.getElementById(`${prefix}-dept-options`);
-    const hiddenInput = document.getElementById(prefix === 'lodge' ? 'comp-dept' : 'edit-dept');
+    let hiddenInput = null;
+    if (prefix === 'lodge') hiddenInput = document.getElementById('comp-dept');
+    else if (prefix === 'edit') hiddenInput = document.getElementById('edit-dept');
+    else if (prefix === 'create-user') hiddenInput = document.getElementById('modal-user-dept');
+    else if (prefix === 'edit-user') hiddenInput = document.getElementById('edit-user-dept');
     const toggle = document.getElementById(`${prefix}-dept-toggle`);
     if (!container || !hiddenInput) return;
 
@@ -1022,7 +1071,11 @@ function updateMultiSelectLabel(prefix, selectedVals) {
 
 function setMultiSelectValues(prefix, val) {
     const container = document.getElementById(`${prefix}-dept-options`);
-    const hiddenInput = document.getElementById(prefix === 'lodge' ? 'comp-dept' : 'edit-dept');
+    let hiddenInput = null;
+    if (prefix === 'lodge') hiddenInput = document.getElementById('comp-dept');
+    else if (prefix === 'edit') hiddenInput = document.getElementById('edit-dept');
+    else if (prefix === 'create-user') hiddenInput = document.getElementById('modal-user-dept');
+    else if (prefix === 'edit-user') hiddenInput = document.getElementById('edit-user-dept');
     if (!container || !hiddenInput) return;
 
     let targetArray = [];
@@ -1076,13 +1129,17 @@ function populateDepartmentDropdowns() {
         if (currentVal) el.value = currentVal;
     });
 
-    // 2. Multi-select options for lodge and edit
-    ['lodge', 'edit'].forEach(prefix => {
+    // 2. Multi-select options for lodge, edit, create-user, edit-user
+    ['lodge', 'edit', 'create-user', 'edit-user'].forEach(prefix => {
         const container = document.getElementById(`${prefix}-dept-options`);
         if (!container) return;
 
         // Remember current selections if any
-        const hiddenInput = document.getElementById(prefix === 'lodge' ? 'comp-dept' : 'edit-dept');
+        let hiddenInput = null;
+        if (prefix === 'lodge') hiddenInput = document.getElementById('comp-dept');
+        else if (prefix === 'edit') hiddenInput = document.getElementById('edit-dept');
+        else if (prefix === 'create-user') hiddenInput = document.getElementById('modal-user-dept');
+        else if (prefix === 'edit-user') hiddenInput = document.getElementById('edit-user-dept');
         const currentSelections = (hiddenInput?.value || '').split(',').map(s => s.trim()).filter(Boolean);
 
         if (!currentDepartments.length) {
@@ -2098,6 +2155,12 @@ function syncBodyModalOpen() {
 }
 
 function openCreateUserModal() {
+    document.getElementById('modal-user-name').value = '';
+    document.getElementById('modal-user-email').value = '';
+    document.getElementById('modal-user-password').value = '';
+    populateDepartmentDropdowns();
+    setMultiSelectValues('create-user', ['General']);
+    loadRolesDropdownForUsers();
     const modal = document.getElementById('create-user-modal');
     modal.style.display = 'flex';
     document.body.classList.add('modal-open');
@@ -2159,14 +2222,12 @@ function openEditUserModal(userId) {
     document.getElementById('edit-user-email').value = user.Email || '';
     document.getElementById('edit-user-password').value = '';
 
-    // Populate and select department
+    // Populate and select multi-department
     populateDepartmentDropdowns();
-    const deptSelect = document.getElementById('edit-user-dept');
-    if (deptSelect) {
-        deptSelect.value = user.Department || 'General';
-    }
+    setMultiSelectValues('edit-user', user.Department || 'General');
 
-    // Role options & RBAC guard
+    // Dynamic Role options & RBAC guard
+    loadRolesDropdownForUsers();
     const roleSelect = document.getElementById('edit-user-role');
     const superOpt = document.getElementById('opt-edit-role-super-admin');
     const roleNote = document.getElementById('edit-user-role-note');
@@ -4650,4 +4711,556 @@ async function executeMasterDelete() {
         btn.disabled = false;
         btn.textContent = 'Delete Permanently';
     }
+}
+
+
+// =============================================================================
+// ENTERPRISE RBAC & AUDIT TRAIL LOGIC
+// =============================================================================
+
+async function loadRolesDropdownForUsers() {
+    try {
+        if (!allRolesCache || allRolesCache.length === 0) {
+            const res = await fetch('/api/rbac/roles');
+            if (res.ok) {
+                const data = await res.json();
+                allRolesCache = data.roles || [];
+            }
+        }
+        if (!allRolesCache || allRolesCache.length === 0) return;
+
+        const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
+        const roleDropdowns = ['modal-user-role', 'edit-user-role'];
+
+        roleDropdowns.forEach(dropdownId => {
+            const el = document.getElementById(dropdownId);
+            if (!el) return;
+            const currentVal = el.value;
+
+            el.innerHTML = allRolesCache.map(r => {
+                const isSuper = r.role_name === 'Super Admin';
+                const disabled = isSuper && !isSuperAdmin ? 'disabled' : '';
+                const systemBadge = r.is_system ? ' (System)' : '';
+                return `<option value="${escapeHtml(r.role_name)}" ${disabled} ${isSuper ? 'id="opt-edit-role-super-admin"' : ''}>${escapeHtml(r.role_name)}${systemBadge}</option>`;
+            }).join('');
+
+            if (currentVal && Array.from(el.options).some(o => o.value === currentVal)) {
+                el.value = currentVal;
+            }
+        });
+    } catch (e) {
+        console.warn('Could not populate dynamic user roles dropdown:', e);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// ROLES MANAGEMENT VIEW
+// -----------------------------------------------------------------------------
+
+async function loadRolesData() {
+    const tbody = document.getElementById('roles-table-body');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding: 24px;">Loading role configurations from Google Sheets...</td></tr>';
+
+    try {
+        const [rolesRes, permsRes] = await Promise.all([
+            fetch('/api/rbac/roles'),
+            fetch('/api/rbac/permissions')
+        ]);
+
+        if (rolesRes.ok && permsRes.ok) {
+            const rolesData = await rolesRes.json();
+            const permsData = await permsRes.json();
+            allRolesCache = rolesData.roles || [];
+            allPermissionsCache = permsData.permissions || [];
+            renderRolesTable();
+            populateRoleCloneDropdown();
+        } else {
+            if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger" style="padding: 24px;">Failed to load roles from server.</td></tr>';
+        }
+    } catch (err) {
+        console.error('Failed to load roles:', err);
+        if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger" style="padding: 24px;">Error: ${escapeHtml(err.message)}</td></tr>`;
+    }
+}
+
+function renderRolesTable() {
+    const tbody = document.getElementById('roles-table-body');
+    if (!tbody) return;
+
+    if (!allRolesCache || allRolesCache.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding: 24px;">No roles configured.</td></tr>';
+        return;
+    }
+
+    const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
+
+    tbody.innerHTML = allRolesCache.map(r => {
+        const isSystem = !!r.is_system;
+        const scope = r.data_scope || 'OWN';
+        let scopeColor = '#64748b';
+        let scopeBg = '#f1f5f9';
+        if (scope === 'ALL') { scopeColor = '#3730a3'; scopeBg = '#e0e7ff'; }
+        else if (scope === 'DEPARTMENT') { scopeColor = '#065f46'; scopeBg = '#ecfdf5'; }
+        else if (scope === 'OWN') { scopeColor = '#92400e'; scopeBg = '#fef3c7'; }
+
+        const permsList = r.permissions || [];
+        const isWildcard = permsList.includes('*');
+        const permBadge = isWildcard ? 
+            '<span class="badge" style="background: #eff6ff; color: #1d4ed8; font-weight: 600;">Full Access (*)</span>' : 
+            `<span class="badge" style="background: #f8fafc; color: #334155;">${permsList.length} of ${allPermissionsCache.length || 28} perms</span>`;
+
+        let actionBtns = '';
+        if (isSuperAdmin) {
+            actionBtns += `<button type="button" class="btn btn-outline-primary btn-sm" style="margin-right: 4px;" onclick="openEditRoleModal('${escapeHtml(r.role_id)}')" title="Edit Role and Permissions">Edit</button>`;
+            actionBtns += `<button type="button" class="btn btn-outline-secondary btn-sm" style="margin-right: 4px;" onclick="openCloneRoleModal('${escapeHtml(r.role_id)}')" title="Clone as new custom role">Clone</button>`;
+            if (!isSystem) {
+                actionBtns += `<button type="button" class="btn btn-outline-danger btn-sm" onclick="openDeleteRoleModal('${escapeHtml(r.role_id)}', '${escapeHtml(r.role_name)}')" title="Delete custom role">Delete</button>`;
+            }
+        } else {
+            actionBtns = '<span class="text-muted" style="font-size: 0.8rem;">Read-only</span>';
+        }
+
+        return `
+            <tr>
+                <td>
+                    <div style="font-weight: 600; color: #0f172a;">${escapeHtml(r.role_name)}</div>
+                    <small class="text-muted">${escapeHtml(r.description || '')}</small>
+                </td>
+                <td>
+                    <span class="badge" style="background: ${isSystem ? '#e0f2fe; color: #0369a1;' : '#f3e8ff; color: #7e22ce;'}">
+                        ${isSystem ? 'System' : 'Custom'}
+                    </span>
+                </td>
+                <td>
+                    <span class="badge" style="background: ${scopeBg}; color: ${scopeColor}; font-weight: 600;">
+                        ${escapeHtml(scope)}
+                    </span>
+                </td>
+                <td>
+                    <span style="font-family: monospace; font-size: 0.9rem;">${escapeHtml(String(r.assigned_users_count || 0))}</span> users
+                </td>
+                <td>${permBadge}</td>
+                <td>${actionBtns}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function populateRoleCloneDropdown() {
+    const sel = document.getElementById('role-builder-clone-source');
+    if (!sel) return;
+    const currentVal = sel.value;
+
+    sel.innerHTML = '<option value="">-- Choose a template to pre-fill --</option>' +
+        allRolesCache.map(r => `<option value="${escapeHtml(r.role_name)}">${escapeHtml(r.role_name)} (${escapeHtml(r.data_scope || 'OWN')})</option>`).join('');
+
+    if (currentVal) sel.value = currentVal;
+}
+
+function renderPermissionsMatrix(selectedPerms = [], isSuperAdminRole = false) {
+    const container = document.getElementById('role-builder-permissions-matrix');
+    if (!container) return;
+
+    if (!allPermissionsCache || allPermissionsCache.length === 0) {
+        container.innerHTML = '<div class="text-muted p-2">Zero permissions found.</div>';
+        return;
+    }
+
+    // Group by category
+    const grouped = {};
+    allPermissionsCache.forEach(p => {
+        const cat = p.category || 'General';
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push(p);
+    });
+
+    const isWildcard = selectedPerms.includes('*');
+
+    container.innerHTML = Object.keys(grouped).map(cat => {
+        const perms = grouped[cat];
+        const allInCatChecked = !isWildcard && perms.every(p => selectedPerms.includes(p.id));
+
+        const permCheckboxes = perms.map(p => {
+            const checked = isWildcard || selectedPerms.includes(p.id) ? 'checked' : '';
+            const disabled = isSuperAdminRole ? 'disabled' : '';
+            return `
+                <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 0.82rem; background: #fff; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); cursor: pointer;">
+                    <input type="checkbox" class="role-perm-checkbox" data-category="${escapeHtml(cat)}" value="${escapeHtml(p.id)}" ${checked} ${disabled} onchange="onPermCheckboxChanged('${escapeHtml(cat)}')">
+                    <div>
+                        <div style="font-weight: 500; color: #1e293b;">${escapeHtml(p.name)}</div>
+                        <div class="text-muted" style="font-size: 0.75rem;"><code>${escapeHtml(p.id)}</code> &bull; ${escapeHtml(p.description)}</div>
+                    </div>
+                </label>
+            `;
+        }).join('');
+
+        return `
+            <div class="perm-module-group" style="margin-bottom: 14px; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <strong style="font-size: 0.88rem; color: #1e3a8a;">${escapeHtml(cat)}</strong>
+                    <label style="font-size: 0.78rem; color: #64748b; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                        <input type="checkbox" id="cat-toggle-${escapeHtml(cat.replace(/\s+/g, '-'))}" ${allInCatChecked || isWildcard ? 'checked' : ''} ${isSuperAdminRole ? 'disabled' : ''} onchange="toggleCategoryPerms('${escapeHtml(cat)}', this.checked)">
+                        Select All ${escapeHtml(cat)}
+                    </label>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px;">
+                    ${permCheckboxes}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function onPermCheckboxChanged(category) {
+    const catCheckboxes = document.querySelectorAll(`.role-perm-checkbox[data-category="${category}"]`);
+    const allChecked = Array.from(catCheckboxes).every(cb => cb.checked);
+    const catToggle = document.getElementById(`cat-toggle-${category.replace(/\s+/g, '-')}`);
+    if (catToggle) catToggle.checked = allChecked;
+}
+
+function toggleCategoryPerms(category, isChecked) {
+    const catCheckboxes = document.querySelectorAll(`.role-perm-checkbox[data-category="${category}"]`);
+    catCheckboxes.forEach(cb => {
+        if (!cb.disabled) cb.checked = isChecked;
+    });
+}
+
+function setAllPermissions(enable) {
+    document.querySelectorAll('.role-perm-checkbox').forEach(cb => {
+        if (!cb.disabled) cb.checked = enable;
+    });
+    document.querySelectorAll('[id^="cat-toggle-"]').forEach(cb => {
+        if (!cb.disabled) cb.checked = enable;
+    });
+}
+
+function applyRoleTemplateClone() {
+    const sel = document.getElementById('role-builder-clone-source');
+    if (!sel || !sel.value) return;
+    const tplRole = allRolesCache.find(r => r.role_name === sel.value);
+    if (!tplRole) return;
+
+    document.getElementById('role-builder-scope').value = tplRole.data_scope || 'OWN';
+    renderPermissionsMatrix(tplRole.permissions || [], false);
+}
+
+function openCreateRoleModal() {
+    document.getElementById('role-builder-mode').value = 'create';
+    document.getElementById('role-builder-original-id').value = '';
+    document.getElementById('modal-role-builder-title').textContent = 'Create Custom Role';
+    document.getElementById('role-builder-name').value = '';
+    document.getElementById('role-builder-name').disabled = false;
+    document.getElementById('role-builder-name-hint').style.display = 'none';
+    document.getElementById('role-builder-scope').value = 'DEPARTMENT';
+    document.getElementById('role-builder-desc').value = '';
+    document.getElementById('role-builder-clone-source').value = '';
+
+    renderPermissionsMatrix([], false);
+    document.getElementById('modal-role-builder').style.display = 'flex';
+    syncBodyModalOpen();
+}
+
+function openEditRoleModal(roleId) {
+    const role = allRolesCache.find(r => r.role_id === roleId);
+    if (!role) {
+        showToast('Role configuration not found.', 'error');
+        return;
+    }
+
+    document.getElementById('role-builder-mode').value = 'edit';
+    document.getElementById('role-builder-original-id').value = role.role_id;
+    document.getElementById('modal-role-builder-title').textContent = `Edit Role: ${role.role_name}`;
+    document.getElementById('role-builder-name').value = role.role_name;
+
+    const isSystem = !!role.is_system;
+    const isSuperAdminRole = role.role_name === 'Super Admin';
+
+    // System roles cannot be renamed
+    document.getElementById('role-builder-name').disabled = isSystem;
+    const hint = document.getElementById('role-builder-name-hint');
+    if (hint) {
+        hint.style.display = isSystem ? 'block' : 'none';
+        hint.textContent = isSystem ? 'System default role names are protected and cannot be renamed.' : '';
+    }
+
+    document.getElementById('role-builder-scope').value = role.data_scope || 'OWN';
+    document.getElementById('role-builder-desc').value = role.description || '';
+    document.getElementById('role-builder-clone-source').value = '';
+
+    renderPermissionsMatrix(role.permissions || [], isSuperAdminRole);
+    document.getElementById('modal-role-builder').style.display = 'flex';
+    syncBodyModalOpen();
+}
+
+function openCloneRoleModal(roleId) {
+    const role = allRolesCache.find(r => r.role_id === roleId);
+    if (!role) return;
+
+    document.getElementById('role-builder-mode').value = 'create';
+    document.getElementById('role-builder-original-id').value = '';
+    document.getElementById('modal-role-builder-title').textContent = `Create Role (Cloned from ${role.role_name})`;
+    document.getElementById('role-builder-name').value = `${role.role_name} Copy`;
+    document.getElementById('role-builder-name').disabled = false;
+    document.getElementById('role-builder-name-hint').style.display = 'none';
+    document.getElementById('role-builder-scope').value = role.data_scope || 'OWN';
+    document.getElementById('role-builder-desc').value = `Cloned from ${role.role_name}. ${role.description || ''}`.trim();
+    document.getElementById('role-builder-clone-source').value = role.role_name;
+
+    renderPermissionsMatrix(role.permissions || [], false);
+    document.getElementById('modal-role-builder').style.display = 'flex';
+    syncBodyModalOpen();
+}
+
+function closeRoleBuilderModal() {
+    document.getElementById('modal-role-builder').style.display = 'none';
+    syncBodyModalOpen();
+}
+
+async function submitRoleBuilder(e) {
+    e.preventDefault();
+    const mode = document.getElementById('role-builder-mode').value;
+    const originalId = document.getElementById('role-builder-original-id').value;
+    const roleName = document.getElementById('role-builder-name').value.trim();
+    const dataScope = document.getElementById('role-builder-scope').value;
+    const description = document.getElementById('role-builder-desc').value.trim();
+
+    if (!roleName) {
+        showToast('Role Name is required.', 'error');
+        return;
+    }
+
+    // Collect permissions
+    let permissions = [];
+    if (roleName === 'Super Admin') {
+        permissions = ['*'];
+    } else {
+        const checked = Array.from(document.querySelectorAll('.role-perm-checkbox:checked'));
+        permissions = checked.map(cb => cb.value);
+    }
+
+    const submitBtn = document.getElementById('role-builder-submit-btn');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving Role...';
+
+    try {
+        const endpoint = mode === 'create' ? '/api/rbac/roles' : `/api/rbac/roles/${originalId}`;
+        const method = mode === 'create' ? 'POST' : 'PUT';
+
+        const payload = {
+            role_name: roleName,
+            data_scope: dataScope,
+            description: description,
+            permissions: permissions
+        };
+
+        const res = await fetch(endpoint, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+            showToast(data.message, 'success');
+            closeRoleBuilderModal();
+            await loadRolesData();
+            await loadRolesDropdownForUsers();
+        } else {
+            showToast(data.message || 'Failed to save role.', 'error');
+        }
+    } catch (err) {
+        showToast(`Network error: ${err.message}`, 'error');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Save Role';
+    }
+}
+
+let activeRoleDeleteId = null;
+
+async function openDeleteRoleModal(roleId, roleName) {
+    activeRoleDeleteId = roleId;
+    document.getElementById('role-delete-id').value = roleId;
+    document.getElementById('role-delete-name').textContent = roleName;
+
+    const loadingEl = document.getElementById('role-delete-loading');
+    const blockedEl = document.getElementById('role-delete-blocked');
+    const allowedEl = document.getElementById('role-delete-allowed');
+    const confirmBtn = document.getElementById('role-delete-confirm-btn');
+
+    loadingEl.style.display = 'block';
+    blockedEl.style.display = 'none';
+    allowedEl.style.display = 'none';
+    confirmBtn.style.display = 'none';
+
+    document.getElementById('modal-role-delete').style.display = 'flex';
+    syncBodyModalOpen();
+
+    try {
+        const res = await fetch(`/api/rbac/roles/${roleId}/usage`);
+        const data = await res.json();
+        loadingEl.style.display = 'none';
+
+        if (res.ok) {
+            const count = data.assigned_users_count || 0;
+            if (count > 0) {
+                document.getElementById('role-delete-usage-count').textContent = count;
+                blockedEl.style.display = 'block';
+                confirmBtn.style.display = 'none';
+            } else {
+                allowedEl.style.display = 'block';
+                confirmBtn.style.display = 'inline-block';
+            }
+        } else {
+            showToast(data.message || 'Error checking role usage.', 'error');
+            closeRoleDeleteModal();
+        }
+    } catch (err) {
+        loadingEl.style.display = 'none';
+        showToast('Network error checking role usage.', 'error');
+    }
+}
+
+function closeRoleDeleteModal() {
+    activeRoleDeleteId = null;
+    document.getElementById('modal-role-delete').style.display = 'none';
+    syncBodyModalOpen();
+}
+
+async function executeRoleDelete() {
+    if (!activeRoleDeleteId) return;
+    const btn = document.getElementById('role-delete-confirm-btn');
+    btn.disabled = true;
+    btn.textContent = 'Deleting...';
+
+    try {
+        const res = await fetch(`/api/rbac/roles/${activeRoleDeleteId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(data.message, 'success');
+            closeRoleDeleteModal();
+            await loadRolesData();
+            await loadRolesDropdownForUsers();
+        } else {
+            showToast(data.message || 'Failed to delete role.', 'error');
+        }
+    } catch (err) {
+        showToast(`Network error: ${err.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Delete Role Permanently';
+    }
+}
+
+// -----------------------------------------------------------------------------
+// SYSTEM SECURITY & AUDIT TRAIL VIEW
+// -----------------------------------------------------------------------------
+
+async function loadAuditTrailData() {
+    const tbody = document.getElementById('audit-table-body');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding: 24px;">Querying audit logs from Google Sheets...</td></tr>';
+
+    const module = document.getElementById('audit-filter-module')?.value || '';
+    const action = document.getElementById('audit-filter-action')?.value || '';
+    const search = document.getElementById('audit-filter-search')?.value.trim() || '';
+    const limit = document.getElementById('audit-filter-limit')?.value || '100';
+
+    const params = new URLSearchParams();
+    if (module) params.set('module', module);
+    if (action) params.set('action', action);
+    if (search) params.set('search', search);
+    if (limit) params.set('limit', limit);
+
+    try {
+        const res = await fetch(`/api/rbac/audit-logs?${params.toString()}`);
+        if (res.ok) {
+            const data = await res.json();
+            auditTrailCache = data.logs || [];
+            renderAuditTrailTable();
+        } else {
+            if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="text-center text-danger" style="padding: 24px;">Failed to load audit logs.</td></tr>';
+        }
+    } catch (err) {
+        console.error('Failed to load audit trail:', err);
+        if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger" style="padding: 24px;">Error: ${escapeHtml(err.message)}</td></tr>`;
+    }
+}
+
+function debounceAuditSearch() {
+    if (auditSearchDebounceTimer) clearTimeout(auditSearchDebounceTimer);
+    auditSearchDebounceTimer = setTimeout(() => {
+        loadAuditTrailData();
+    }, 350);
+}
+
+function renderAuditTrailTable() {
+    const tbody = document.getElementById('audit-table-body');
+    if (!tbody) return;
+
+    if (!auditTrailCache || auditTrailCache.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding: 24px;">Zero audit events match the selected criteria.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = auditTrailCache.map(log => {
+        const ts = log.Timestamp || '-';
+        const user = log.User_Email || log.User_ID || 'System';
+        const role = log.User_Role || '-';
+        const action = log.Action || '-';
+        const module = log.Module || '-';
+        const recordId = log.Record_ID || '-';
+        const dept = log.Department || '-';
+        const result = String(log.Result || 'SUCCESS').toUpperCase();
+
+        let actionBg = '#e2e8f0';
+        let actionColor = '#334155';
+        if (action.includes('CREATE') || action.includes('LOGIN')) { actionBg = '#dcfce7'; actionColor = '#15803d'; }
+        else if (action.includes('UPDATE') || action.includes('STATUS')) { actionBg = '#e0f2fe'; actionColor = '#0369a1'; }
+        else if (action.includes('DELETE') || action.includes('DENIED')) { actionBg = '#fee2e2'; actionColor = '#b91c1c'; }
+        else if (action.includes('ASSIGN')) { actionBg = '#fef3c7'; actionColor = '#b45309'; }
+
+        const resultBadge = result === 'SUCCESS' ? 
+            '<span class="badge" style="background:#dcfce7;color:#15803d;font-weight:600;">SUCCESS</span>' : 
+            '<span class="badge" style="background:#fee2e2;color:#b91c1c;font-weight:600;">FAILED</span>';
+
+        let details = log.Details || '';
+        let newState = log.New_State || '';
+        let detailText = details;
+        if (newState && !detailText.includes(newState)) {
+            detailText += detailText ? ` | ${newState}` : newState;
+        }
+
+        return `
+            <tr>
+                <td style="font-size: 0.8rem; font-family: monospace; white-space: nowrap;">${escapeHtml(ts)}</td>
+                <td>
+                    <div style="font-weight: 500; font-size: 0.85rem;">${escapeHtml(user)}</div>
+                    <small class="text-muted">${escapeHtml(role)}</small>
+                </td>
+                <td>
+                    <span class="badge" style="background: ${actionBg}; color: ${actionColor}; font-weight: 600; font-size: 0.75rem;">
+                        ${escapeHtml(action)}
+                    </span>
+                </td>
+                <td style="font-size: 0.85rem;">${escapeHtml(module)}</td>
+                <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(recordId)}</td>
+                <td style="font-size: 0.85rem;">${escapeHtml(dept)}</td>
+                <td>${resultBadge}</td>
+                <td style="font-size: 0.82rem; color: #475569; max-width: 320px; word-break: break-word;">${escapeHtml(detailText || '-')}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function exportAuditTrailCsv() {
+    const module = document.getElementById('audit-filter-module')?.value || '';
+    const action = document.getElementById('audit-filter-action')?.value || '';
+    const search = document.getElementById('audit-filter-search')?.value.trim() || '';
+
+    const params = new URLSearchParams();
+    if (module) params.set('module', module);
+    if (action) params.set('action', action);
+    if (search) params.set('search', search);
+
+    window.open(`/api/rbac/audit-logs/export?${params.toString()}`, '_blank');
 }
