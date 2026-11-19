@@ -490,15 +490,71 @@
 
                 <!-- 3. MY COMPLAINTS VIEW -->
                 <section id="view-my-complaints" class="view-panel" style="display: none;">
+                    <!-- KPI Summary Stats Grid -->
+                    <div class="stats-grid" style="margin-bottom: 20px;">
+                        <div class="stat-card">
+                            <div class="stat-label">Total My Records</div>
+                            <div class="stat-val" id="my-stat-total">0</div>
+                            <div class="stat-sub">Assigned to or lodged by you</div>
+                        </div>
+                        <div class="stat-card" style="border-left: 4px solid #2563eb;">
+                            <div class="stat-label">Assigned To Me</div>
+                            <div class="stat-val" id="my-stat-assigned" style="color: #2563eb;">0</div>
+                            <div class="stat-sub">You are the handler</div>
+                        </div>
+                        <div class="stat-card" style="border-left: 4px solid #8b5cf6;">
+                            <div class="stat-label">Created By Me</div>
+                            <div class="stat-val" id="my-stat-created" style="color: #8b5cf6;">0</div>
+                            <div class="stat-sub">Lodged by your account</div>
+                        </div>
+                        <div class="stat-card stat-pending">
+                            <div class="stat-label">Pending / Active</div>
+                            <div class="stat-val" id="my-stat-pending">0</div>
+                            <div class="stat-sub">Under Review or In Progress</div>
+                        </div>
+                        <div class="stat-card stat-resolved">
+                            <div class="stat-label">Resolved / Closed</div>
+                            <div class="stat-val" id="my-stat-closed">0</div>
+                            <div class="stat-sub">Completed records</div>
+                        </div>
+                    </div>
+
                     <div class="panel-card">
-                        <div class="panel-header">
+                        <div class="panel-header" style="flex-wrap: wrap; gap: 12px; align-items: center;">
                             <div>
-                                <h3>My Complaints</h3>
-                                <p class="text-muted">Complaints submitted by your account</p>
+                                <h3 style="margin-bottom: 2px;">My Complaints Workspace</h3>
+                                <p class="text-muted" style="font-size: 0.85rem; margin: 0;">View, track, and manage complaints assigned to you or lodged by your account.</p>
                             </div>
-                            <div class="table-actions">
-                                <input type="text" id="my-search-input" class="search-input" placeholder="Search by ID, Customer, Mobile, Invoice...">
-                                <select id="my-status-filter" class="filter-select">
+                            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="loadMyComplaints(true)" title="Refresh data from server">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                    Refresh
+                                </button>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="switchView('lodge')">
+                                    + Lodge Complaint
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Filter Controls Bar -->
+                        <div class="table-actions" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; padding: 0 4px;">
+                            <div style="flex: 1 1 240px;">
+                                <input type="text" id="my-search-input" class="search-input" style="width: 100%;" placeholder="Search ID, Customer, Mobile, Invoice, Issue, Remarks...">
+                            </div>
+                            <div>
+                                <select id="my-scope-filter" class="filter-select" title="Filter by Ownership Scope">
+                                    <option value="ALL">Ownership: All My Records</option>
+                                    <option value="ASSIGNED">Assigned to Me</option>
+                                    <option value="CREATED">Created by Me</option>
+                                </select>
+                            </div>
+                            <div>
+                                <select id="my-dept-filter" class="filter-select" title="Filter by Department">
+                                    <option value="ALL">All Departments</option>
+                                </select>
+                            </div>
+                            <div>
+                                <select id="my-status-filter" class="filter-select" title="Filter by Status">
                                     <option value="ALL">All Statuses</option>
                                     <option value="Submitted">Submitted</option>
                                     <option value="Under Review">Under Review</option>
@@ -506,7 +562,9 @@
                                     <option value="Resolved">Resolved</option>
                                     <option value="Closed">Closed</option>
                                 </select>
-                                <select id="my-priority-filter" class="filter-select">
+                            </div>
+                            <div>
+                                <select id="my-priority-filter" class="filter-select" title="Filter by Priority">
                                     <option value="ALL">All Priorities</option>
                                     <option value="Low">Low</option>
                                     <option value="Medium">Medium</option>
@@ -514,7 +572,14 @@
                                     <option value="Urgent">Urgent</option>
                                 </select>
                             </div>
+                            <div>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="resetMyFilters()" title="Reset all filters">
+                                    Reset Filters
+                                </button>
+                            </div>
                         </div>
+
+                        <!-- Data Table Container -->
                         <div class="table-responsive">
                             <table class="data-table">
                                 <thead>
@@ -532,9 +597,30 @@
                                     </tr>
                                 </thead>
                                 <tbody id="my-complaints-table">
-                                    <tr><td colspan="10" class="text-center py-4 text-muted">No complaints found.</td></tr>
+                                    <tr><td colspan="10" class="text-center py-4 text-muted">Loading your complaints...</td></tr>
                                 </tbody>
                             </table>
+                        </div>
+
+                        <!-- Table Pagination Bar -->
+                        <div class="table-pagination-bar" id="my-pagination-bar" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 4px 4px; margin-top: 8px; flex-wrap: wrap; gap: 8px;">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <div class="pagination-info text-muted" id="my-pagination-info" style="font-size: 0.85rem;">
+                                    Showing 0 to 0 of 0 complaints
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem;" class="text-muted">
+                                    <label for="my-page-size">Per page:</label>
+                                    <select id="my-page-size" class="filter-select" style="padding: 2px 6px; font-size: 0.82rem; height: auto;">
+                                        <option value="10">10</option>
+                                        <option value="25" selected>25</option>
+                                        <option value="50">50</option>
+                                        <option value="100">100</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="pagination-buttons" id="my-pagination-controls" style="display: flex; gap: 4px;">
+                                <!-- Dynamically generated pagination pills -->
+                            </div>
                         </div>
                     </div>
                 </section>

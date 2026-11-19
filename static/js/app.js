@@ -6,6 +6,15 @@ let currentUser = null;
 let currentDepartments = [];
 let allStaffUsers = [];
 let allComplaintsCache = [];
+let myComplaintsCache = [];
+let myComplaintsState = {
+    allRecords: [],
+    filteredRecords: [],
+    page: 1,
+    pageSize: 25,
+    totalPages: 1,
+    isLoading: false
+};
 let activeComplaintId = null;
 let driveDiagnostic = null;
 let allRolesCache = [];
@@ -128,9 +137,16 @@ function setupEventListeners() {
     const mySearch = document.getElementById('my-search-input');
     const myFilter = document.getElementById('my-status-filter');
     const myPrio = document.getElementById('my-priority-filter');
-    if (mySearch) mySearch.addEventListener('input', filterMyComplaints);
-    if (myFilter) myFilter.addEventListener('change', filterMyComplaints);
-    if (myPrio) myPrio.addEventListener('change', filterMyComplaints);
+    const myScope = document.getElementById('my-scope-filter');
+    const myDept = document.getElementById('my-dept-filter');
+    const myPageSize = document.getElementById('my-page-size');
+
+    if (mySearch) mySearch.addEventListener('input', () => filterMyComplaints(1));
+    if (myFilter) myFilter.addEventListener('change', () => filterMyComplaints(1));
+    if (myPrio) myPrio.addEventListener('change', () => filterMyComplaints(1));
+    if (myScope) myScope.addEventListener('change', () => filterMyComplaints(1));
+    if (myDept) myDept.addEventListener('change', () => filterMyComplaints(1));
+    if (myPageSize) myPageSize.addEventListener('change', handleMyPageSizeChange);
 
     const manageSearch = document.getElementById('manage-search-input');
     const manageDept = document.getElementById('manage-dept-filter');
@@ -1380,80 +1396,409 @@ function renderRecentTable(complaints) {
     `).join('');
 }
 
-async function loadMyComplaints() {
-    try {
-        const res = await fetch('/api/complaints');
-        const data = await res.json();
-        if (res.ok && data.complaints) {
-            allComplaintsCache = data.complaints;
-            filterMyComplaints();
+// =============================================================================
+// MY COMPLAINTS MODULE (OWNERSHIP MAPPING, STATS, FILTERING & PAGINATION)
+// =============================================================================
+
+function isHandledByUser(c, user) {
+    if (!c || !user) return false;
+    const userEmail = (user.email || '').toLowerCase().trim();
+    const userName = (user.name || '').toLowerCase().trim();
+    const userId = String(user.user_id || user.id || '').toLowerCase().trim();
+
+    // 1. Handled By column
+    const handledBy = String(c['Handled By'] || c.handled_by || '').toLowerCase().trim();
+    if (handledBy) {
+        if (userEmail && (handledBy === userEmail || handledBy.includes(userEmail))) return true;
+        if (userName && (handledBy === userName || userName.includes(handledBy) || handledBy.includes(userName))) return true;
+        if (userName) {
+            const nameTokens = userName.split(/\s+/).filter(Boolean);
+            if (nameTokens.some(token => token === handledBy || handledBy.startsWith(token))) return true;
         }
+    }
+
+    // 2. Assigned To Name / Email
+    const assignedName = String(c['Assigned To Name'] || c.assigned_to_name || '').toLowerCase().trim();
+    if (assignedName && userName && (assignedName === userName || userName.includes(assignedName))) return true;
+
+    const assignedEmail = String(c['Assigned To Email'] || c.assigned_to_email || '').toLowerCase().trim();
+    if (assignedEmail && userEmail && assignedEmail === userEmail) return true;
+
+    // 3. Handled By ID / Assigned ID
+    const handlerId = String(c['Handled By ID'] || c['Assigned To ID'] || c.assigned_to_id || '').toLowerCase().trim();
+    if (handlerId && userId && handlerId === userId) return true;
+
+    return false;
+}
+
+function isCreatedByUser(c, user) {
+    if (!c || !user) return false;
+    const userEmail = (user.email || '').toLowerCase().trim();
+    const userName = (user.name || '').toLowerCase().trim();
+    const userId = String(user.user_id || user.id || '').toLowerCase().trim();
+
+    // 1. Complainant Email
+    const compEmail = String(c['Complainant Email'] || c.email || '').toLowerCase().trim();
+    if (userEmail && compEmail === userEmail) return true;
+
+    // 2. Employee Name
+    const empName = String(c['Employee Name'] || c.employee_name || '').toLowerCase().trim();
+    if (empName) {
+        if (userName && (empName === userName || userName.includes(empName) || empName.includes(userName))) return true;
+        if (userEmail && empName === userEmail) return true;
+        if (userName) {
+            const nameTokens = userName.split(/\s+/).filter(Boolean);
+            if (nameTokens.some(token => token === empName || empName.startsWith(token))) return true;
+        }
+    }
+
+    // 3. User ID / Created By ID
+    const createdById = String(c['User ID'] || c['Created By'] || c.user_id || '').toLowerCase().trim();
+    if (createdById && userId && createdById === userId) return true;
+
+    // 4. Customer Name for regular User / Viewer roles
+    const custName = String(c['Customer Name'] || c['Complainant Name'] || '').toLowerCase().trim();
+    if (custName && userName && custName === userName && (!user.role || user.role === 'User' || user.role === 'Viewer')) return true;
+
+    return false;
+}
+
+function isMyComplaint(c, user) {
+    return isHandledByUser(c, user) || isCreatedByUser(c, user);
+}
+
+function updateMyStats(complaints) {
+    const totalEl = document.getElementById('my-stat-total');
+    const assignedEl = document.getElementById('my-stat-assigned');
+    const createdEl = document.getElementById('my-stat-created');
+    const pendingEl = document.getElementById('my-stat-pending');
+    const closedEl = document.getElementById('my-stat-closed');
+
+    if (!complaints) complaints = [];
+
+    const total = complaints.length;
+    let assigned = 0;
+    let created = 0;
+    let pending = 0;
+    let closed = 0;
+
+    complaints.forEach(c => {
+        if (currentUser) {
+            if (isHandledByUser(c, currentUser)) assigned++;
+            if (isCreatedByUser(c, currentUser)) created++;
+        }
+        const st = (c.Status || '').toLowerCase();
+        if (st === 'resolved' || st === 'closed') {
+            closed++;
+        } else {
+            pending++;
+        }
+    });
+
+    if (totalEl) totalEl.textContent = total;
+    if (assignedEl) assignedEl.textContent = assigned;
+    if (createdEl) createdEl.textContent = created;
+    if (pendingEl) pendingEl.textContent = pending;
+    if (closedEl) closedEl.textContent = closed;
+}
+
+function populateMyDepartmentFilter(complaints) {
+    const deptSelect = document.getElementById('my-dept-filter');
+    if (!deptSelect) return;
+
+    const currentVal = (deptSelect.value || 'ALL').toUpperCase();
+    const deptCounts = {};
+
+    complaints.forEach(c => {
+        const raw = c['Department Name'] || c.Department || '';
+        const depts = raw.split(',').map(d => d.trim()).filter(Boolean);
+        depts.forEach(d => {
+            deptCounts[d] = (deptCounts[d] || 0) + 1;
+        });
+    });
+
+    const sortedDepts = Object.keys(deptCounts).sort((a, b) => a.localeCompare(b));
+
+    let html = '<option value="ALL">All Departments</option>';
+    sortedDepts.forEach(dept => {
+        const count = deptCounts[dept];
+        const isSelected = dept.toUpperCase() === currentVal ? 'selected' : '';
+        html += `<option value="${escapeHtml(dept)}" ${isSelected}>${escapeHtml(dept)} (${count})</option>`;
+    });
+
+    deptSelect.innerHTML = html;
+}
+
+function resetMyFilters() {
+    const searchEl = document.getElementById('my-search-input');
+    const scopeEl = document.getElementById('my-scope-filter');
+    const deptEl = document.getElementById('my-dept-filter');
+    const statusEl = document.getElementById('my-status-filter');
+    const prioEl = document.getElementById('my-priority-filter');
+
+    if (searchEl) searchEl.value = '';
+    if (scopeEl) scopeEl.value = 'ALL';
+    if (deptEl) deptEl.value = 'ALL';
+    if (statusEl) statusEl.value = 'ALL';
+    if (prioEl) prioEl.value = 'ALL';
+
+    filterMyComplaints(1);
+}
+
+async function loadMyComplaints(forceRefresh = false) {
+    const tbody = document.getElementById('my-complaints-table');
+    if (tbody) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="10" class="text-center py-4">
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;">
+                        <div class="spinner-border text-primary" role="status" style="width: 24px; height: 24px; border: 3px solid rgba(37,99,235,0.2); border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                        <span class="text-muted" style="font-size: 0.9rem;">Loading your complaints...</span>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }
+
+    try {
+        const res = await fetch('/api/complaints?scope=my');
+        if (!res.ok) {
+            throw new Error(`Server returned HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const complaints = data.complaints || [];
+
+        myComplaintsCache = complaints;
+        myComplaintsState.allRecords = complaints;
+
+        // Also merge into allComplaintsCache so modal lookups (openComplaintModal) find them
+        if (!allComplaintsCache || allComplaintsCache.length === 0) {
+            allComplaintsCache = complaints.slice();
+        } else {
+            const existingIds = new Set(allComplaintsCache.map(c => c['Complaint ID']));
+            complaints.forEach(c => {
+                if (!existingIds.has(c['Complaint ID'])) {
+                    allComplaintsCache.push(c);
+                }
+            });
+        }
+
+        // Populate department filter for My Complaints
+        populateMyDepartmentFilter(complaints);
+
+        // Update KPI Stats
+        updateMyStats(complaints);
+
+        // Filter and render first page
+        filterMyComplaints(1);
     } catch (e) {
         console.error("My complaints load failed:", e);
+        if (tbody) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="10" class="text-center py-4" style="color: var(--status-urgent);">
+                        <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                            <span>⚠️ Failed to load your complaints: ${escapeHtml(e.message || 'Network error')}</span>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="loadMyComplaints(true)">Try Again</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
     }
 }
 
-function filterMyComplaints() {
+function filterMyComplaints(page = 1) {
     const search = (document.getElementById('my-search-input')?.value || '').toLowerCase().trim();
-    const status = document.getElementById('my-status-filter')?.value || 'ALL';
-    const priority = document.getElementById('my-priority-filter')?.value || 'ALL';
+    const scope = (document.getElementById('my-scope-filter')?.value || 'ALL').toUpperCase();
+    const dept = (document.getElementById('my-dept-filter')?.value || 'ALL').toLowerCase().trim();
+    const status = (document.getElementById('my-status-filter')?.value || 'ALL').toLowerCase().trim();
+    const priority = (document.getElementById('my-priority-filter')?.value || 'ALL').toLowerCase().trim();
 
-    const filtered = allComplaintsCache.filter(c => {
-        const matchSearch = !search ||
-            (c['Complaint ID'] || '').toLowerCase().includes(search) ||
-            (c['Customer Name'] || '').toLowerCase().includes(search) ||
-            (c['Customer Mobile No.'] || '').toLowerCase().includes(search) ||
-            (c['Invoice No.'] || '').toLowerCase().includes(search) ||
-            (c['Complain Types'] || '').toLowerCase().includes(search) ||
-            (c.Subject || '').toLowerCase().includes(search) ||
-            (c['Department Name'] || '').toLowerCase().includes(search) ||
-            (c.Department || '').toLowerCase().includes(search) ||
-            (c['Vendor Name'] || '').toLowerCase().includes(search) ||
-            (c['Employee Name'] || '').toLowerCase().includes(search);
+    const filtered = myComplaintsCache.filter(c => {
+        // Scope Filter
+        if (scope === 'ASSIGNED') {
+            if (!currentUser || !isHandledByUser(c, currentUser)) return false;
+        } else if (scope === 'CREATED') {
+            if (!currentUser || !isCreatedByUser(c, currentUser)) return false;
+        }
 
-        const matchStatus = status === 'ALL' || c.Status === status;
-        const matchPriority = priority === 'ALL' || c.Priority === priority;
-        return matchSearch && matchStatus && matchPriority;
+        // Department Filter
+        if (dept !== 'all') {
+            const rawDepts = (c['Department Name'] || c.Department || '').toLowerCase();
+            const deptsList = rawDepts.split(',').map(d => d.trim());
+            if (!deptsList.includes(dept)) return false;
+        }
+
+        // Status Filter
+        if (status !== 'all') {
+            const cStatus = (c.Status || '').toLowerCase().trim();
+            if (cStatus !== status) return false;
+        }
+
+        // Priority Filter
+        if (priority !== 'all') {
+            const cPrio = (c.Priority || '').toLowerCase().trim();
+            if (cPrio !== priority) return false;
+        }
+
+        // Full Search Filter
+        if (search) {
+            const searchBlob = [
+                c['Complaint ID'] || '',
+                c['Customer Name'] || c['Complainant Name'] || '',
+                c['Customer Mobile No.'] || '',
+                c['Invoice No.'] || '',
+                c['Complain Types'] || c.Subject || '',
+                c['Department Name'] || c.Department || '',
+                c['From Department'] || '',
+                c['Handled By'] || c['Assigned To Name'] || '',
+                c['Employee Name'] || '',
+                c['Vendor Name'] || '',
+                c['Salesperson Name'] || '',
+                c['Remarks'] || '',
+                c['Solution Given'] || '',
+                c.Status || '',
+                c.Priority || ''
+            ].join(' ').toLowerCase();
+
+            if (!searchBlob.includes(search)) return false;
+        }
+
+        return true;
     });
 
-    renderMyComplaintsTable(filtered);
+    myComplaintsState.filteredRecords = filtered;
+    myComplaintsState.totalPages = Math.max(1, Math.ceil(filtered.length / myComplaintsState.pageSize));
+    myComplaintsState.page = Math.max(1, Math.min(page, myComplaintsState.totalPages));
+
+    const start = (myComplaintsState.page - 1) * myComplaintsState.pageSize;
+    const end = start + myComplaintsState.pageSize;
+    const pagedRecords = filtered.slice(start, end);
+
+    renderMyComplaintsTable(pagedRecords);
+    renderMyPagination({
+        page: myComplaintsState.page,
+        pageSize: myComplaintsState.pageSize,
+        totalRecords: filtered.length,
+        totalPages: myComplaintsState.totalPages
+    });
 }
 
 function renderMyComplaintsTable(complaints) {
     const tbody = document.getElementById('my-complaints-table');
+    if (!tbody) return;
+
     if (!complaints.length) {
-        tbody.innerHTML = '<tr><td colspan="10" class="text-center py-4 text-muted">No matching complaints found.</td></tr>';
+        if (!myComplaintsCache || myComplaintsCache.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="10" class="text-center py-4 text-muted">You have no complaints assigned or created yet.</td></tr>';
+        } else {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="10" class="text-center py-4 text-muted">
+                        No complaints match your selected filters.<br>
+                        <button type="button" class="btn btn-secondary btn-sm mt-2" onclick="resetMyFilters()">Clear Filters</button>
+                    </td>
+                </tr>
+            `;
+        }
         return;
     }
 
     const canDelete = hasPermission('complaints:delete');
-    const canEditAny = hasPermission('complaints:edit');
-    const isStaffOrAdmin = ['Super Admin', 'Admin', 'Department Head', 'Department Staff'].includes(currentUser?.role);
+    const canEditPermission = hasPermission('complaints:edit');
+    const isStaffOrAdmin = ['Super Admin', 'Admin', 'Department Head', 'Department Staff', 'Complaint Executive'].includes(currentUser?.role) ||
+                           (currentUser?.role && currentUser.role !== 'Viewer' && currentUser.role !== 'User');
 
     tbody.innerHTML = complaints.map(c => {
-        const isOwner = currentUser && (c['Complainant Email'] || '').toLowerCase() === (currentUser.email || '').toLowerCase();
-        const canEdit = canEditAny && (isStaffOrAdmin || (isOwner && (c.Status || '').toLowerCase() === 'submitted'));
+        const isOwner = currentUser && isCreatedByUser(c, currentUser);
+        const isHandler = currentUser && isHandledByUser(c, currentUser);
+        const canEdit = canEditPermission && (isStaffOrAdmin || isHandler || (isOwner && (c.Status || '').toLowerCase() === 'submitted'));
+
         return `
             <tr>
-                <td><strong><code>${c['Complaint ID']}</code></strong></td>
+                <td><strong><code>${escapeHtml(c['Complaint ID'] || '')}</code></strong></td>
                 <td><strong>${escapeHtml(c['Customer Name'] || c['Complainant Name'] || '-')}</strong>${c['Customer Mobile No.'] ? `<br><small class="text-muted">${escapeHtml(c['Customer Mobile No.'])}</small>` : ''}</td>
                 <td>${escapeHtml(c['Invoice No.'] || '-')}</td>
                 <td>${escapeHtml(c['Complain Types'] || c.Subject || '-')}</td>
                 <td>${formatDepartmentBadges(c['Department Name'] || c.Department)}</td>
-                <td><span class="badge badge-prio-${(c.Priority || 'medium').toLowerCase()}">${c.Priority || 'Medium'}</span></td>
-                <td><span class="badge badge-status-${(c.Status || 'submitted').toLowerCase().replace(/\s+/g, '-')}">${c.Status || 'Submitted'}</span></td>
+                <td><span class="badge badge-prio-${(c.Priority || 'medium').toLowerCase()}">${escapeHtml(c.Priority || 'Medium')}</span></td>
+                <td><span class="badge badge-status-${(c.Status || 'submitted').toLowerCase().replace(/\s+/g, '-')}">${escapeHtml(c.Status || 'Submitted')}</span></td>
                 <td>${escapeHtml(c['Handled By'] || c['Assigned To Name'] || 'Unassigned')}</td>
-                <td>${c['Complain Date'] || (c.Timestamp ? c.Timestamp.split(' ')[0] : '-')}</td>
+                <td>${escapeHtml(c['Complain Date'] || (c.Timestamp ? c.Timestamp.split(' ')[0] : '-'))}</td>
                 <td>
                     <div class="table-row-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="openComplaintModal('${c['Complaint ID']}')">View</button>
-                        ${canEdit ? `<button class="btn btn-warning btn-sm" onclick="openEditComplaintModal('${c['Complaint ID']}')">Edit</button>` : ''}
-                        ${canDelete ? `<button class="btn btn-outline-danger btn-sm" onclick="openDeleteModal('${c['Complaint ID']}')">Delete</button>` : ''}
+                        <button class="btn btn-secondary btn-sm" onclick="openComplaintModal('${escapeHtml(c['Complaint ID'])}')">View</button>
+                        ${canEdit ? `<button class="btn btn-warning btn-sm" onclick="openEditComplaintModal('${escapeHtml(c['Complaint ID'])}')">Edit</button>` : ''}
+                        ${canDelete ? `<button class="btn btn-outline-danger btn-sm" onclick="openDeleteModal('${escapeHtml(c['Complaint ID'])}')">Delete</button>` : ''}
                     </div>
                 </td>
             </tr>
         `;
     }).join('');
+}
+
+function renderMyPagination(p) {
+    const infoEl = document.getElementById('my-pagination-info');
+    const controlsEl = document.getElementById('my-pagination-controls');
+    if (!infoEl || !controlsEl) return;
+
+    if (!p || p.totalRecords === 0) {
+        infoEl.textContent = 'Showing 0 to 0 of 0 complaints';
+        controlsEl.innerHTML = '';
+        return;
+    }
+
+    const start = (p.page - 1) * p.pageSize + 1;
+    const end = Math.min(p.totalRecords, p.page * p.pageSize);
+    infoEl.textContent = `Showing ${start} to ${end} of ${p.totalRecords} complaints`;
+
+    if (p.totalPages <= 1) {
+        controlsEl.innerHTML = '';
+        return;
+    }
+
+    let buttonsHtml = '';
+    // Previous
+    buttonsHtml += `<button type="button" class="btn btn-secondary btn-sm" ${p.page <= 1 ? 'disabled' : ''} onclick="goToMyPage(${p.page - 1})">&larr; Prev</button>`;
+
+    // Page numbers
+    const cur = p.page;
+    const total = p.totalPages;
+    const range = [];
+
+    for (let i = 1; i <= total; i++) {
+        if (i === 1 || i === total || (i >= cur - 1 && i <= cur + 1)) {
+            range.push(i);
+        } else if (range[range.length - 1] !== '...') {
+            range.push('...');
+        }
+    }
+
+    range.forEach(item => {
+        if (item === '...') {
+            buttonsHtml += `<span class="pagination-ellipsis" style="padding: 4px 6px; color: var(--text-muted);">...</span>`;
+        } else {
+            const isActive = (item === cur);
+            buttonsHtml += `<button type="button" class="btn ${isActive ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="goToMyPage(${item})">${item}</button>`;
+        }
+    });
+
+    // Next
+    buttonsHtml += `<button type="button" class="btn btn-secondary btn-sm" ${p.page >= total ? 'disabled' : ''} onclick="goToMyPage(${p.page + 1})">Next &rarr;</button>`;
+
+    controlsEl.innerHTML = buttonsHtml;
+}
+
+function goToMyPage(page) {
+    if (page < 1 || page > myComplaintsState.totalPages) return;
+    filterMyComplaints(page);
+}
+
+function handleMyPageSizeChange(e) {
+    const newSize = parseInt(e.target.value) || 25;
+    myComplaintsState.pageSize = newSize;
+    filterMyComplaints(1);
 }
 
 async function loadManageComplaints() {

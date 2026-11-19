@@ -84,10 +84,21 @@ def permission_required(permission_id):
                 return jsonify({'status': 'error', 'message': 'Account is disabled or archived.'}), 403
 
             if not RBACService.has_permission(u, permission_id):
-                return jsonify({
-                    'status': 'error',
-                    'message': f"Access forbidden. Required permission: '{permission_id}'."
-                }), 403
+                # Fallback: try resolving permission against custom roles from database
+                try:
+                    from app import get_db
+                    db = get_db()
+                    custom_roles = db.get_all_roles()
+                    if not RBACService.has_permission(u, permission_id, custom_roles=custom_roles):
+                        return jsonify({
+                            'status': 'error',
+                            'message': f"Access forbidden. Required permission: '{permission_id}'."
+                        }), 403
+                except Exception:
+                    return jsonify({
+                        'status': 'error',
+                        'message': f"Access forbidden. Required permission: '{permission_id}'."
+                    }), 403
 
             return f(*args, **kwargs)
         return decorated

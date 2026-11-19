@@ -526,6 +526,16 @@ class RBACService:
         if role == 'Super Admin':
             return True
 
+        # Fast path: check pre-computed permissions on user dict if present
+        cached_perms = user.get('permissions') or user.get('Permissions')
+        if cached_perms:
+            if isinstance(cached_perms, str):
+                tokens = {p.strip() for p in cached_perms.split(',') if p.strip()}
+            else:
+                tokens = set(cached_perms)
+            if '*' in tokens or permission_id in tokens:
+                return True
+
         effective = cls.get_effective_permissions(user, custom_roles=custom_roles)
         return permission_id in effective
 
@@ -620,12 +630,30 @@ class RBACService:
         if not user or not complaint:
             return False
 
-        handled_by_raw = complaint.get('Handled By') or complaint.get('handled_by') or ''
-        if not handled_by_raw:
+        # Check candidate fields: Handled By, Assigned To Name, Assigned To Email, Assigned To ID
+        candidate_fields = [
+            complaint.get('Handled By'),
+            complaint.get('handled_by'),
+            complaint.get('Assigned To Name'),
+            complaint.get('assigned_to_name'),
+            complaint.get('Assigned To Email'),
+            complaint.get('assigned_to_email'),
+            complaint.get('Handled By ID'),
+            complaint.get('Assigned To ID')
+        ]
+
+        raw_strings = [str(f).strip() for f in candidate_fields if f and str(f).strip()]
+        if not raw_strings:
             return False
 
-        # Split handlers by comma or slash
-        tokens = [h.strip().lower() for h in str(handled_by_raw).replace('/', ',').split(',') if h.strip()]
+        tokens = []
+        ignored_placeholders = {'pending', 'unassigned', 'none', 'n/a', '-', ''}
+        for rs in raw_strings:
+            for tok in rs.replace('/', ',').split(','):
+                clean_tok = tok.strip().lower()
+                if clean_tok and clean_tok not in ignored_placeholders:
+                    tokens.append(clean_tok)
+
         if not tokens:
             return False
 
@@ -654,6 +682,46 @@ class RBACService:
                 return True
 
         return False
+
+    @classmethod
+    def is_created_by_user(cls, user: Dict[str, Any], complaint: Dict[str, Any]) -> bool:
+        """
+        Evaluates whether the given complaint was created/lodged by the user.
+        Checks:
+        - Complainant Email matches user email
+        - Employee Name matches user name, email, or token
+        - Customer Name matches user name (for regular users)
+        - User ID / Created By matches user ID
+        """
+        if not user or not complaint:
+            return False
+
+        user_email = (user.get('email') or user.get('Email') or '').lower().strip()
+        comp_owner = (complaint.get('Complainant Email') or complaint.get('email') or '').lower().strip()
+        if user_email and comp_owner == user_email:
+            return True
+
+        user_name = (user.get('name') or user.get('Full Name') or '').lower().strip()
+        emp_name = (complaint.get('Employee Name') or complaint.get('employee_name') or '').lower().strip()
+        if user_name and emp_name:
+            if user_name == emp_name or emp_name in user_name.split() or user_name.startswith(emp_name):
+                return True
+            if user_email and emp_name == user_email:
+                return True
+
+        user_id = str(user.get('user_id') or user.get('User ID') or '').lower().strip()
+        created_by_id = str(complaint.get('User ID') or complaint.get('Created By') or complaint.get('user_id') or '').lower().strip()
+        if user_id and created_by_id and user_id == created_by_id:
+            return True
+
+        return False
+
+    @classmethod
+    def is_my_complaint(cls, user: Dict[str, Any], complaint: Dict[str, Any]) -> bool:
+        """
+        Returns True if the complaint is assigned to OR created by the user.
+        """
+        return cls.is_created_by_user(user, complaint) or cls.is_handled_by_user(user, complaint)
 
     @classmethod
     def can_access_complaint(
@@ -709,9 +777,7 @@ class RBACService:
         if data_scope == 'ALL':
             return True, "Authorized across all departments."
 
-        user_email = (user.get('email') or user.get('Email') or '').lower().strip()
-        comp_owner = (complaint.get('Complainant Email') or complaint.get('email') or '').lower().strip()
-        is_owner = bool(user_email and user_email == comp_owner)
+        is_owner = cls.is_created_by_user(user, complaint)
 
         # If user is the complaint creator, they can view their own record
         if action == 'view' and is_owner:
@@ -785,8 +851,7 @@ class RBACService:
 
         filtered = []
         for c in complaints:
-            comp_owner = (c.get('Complainant Email') or c.get('email') or '').lower().strip()
-            if user_email and comp_owner == user_email:
+            if cls.is_created_by_user(user, c):
                 filtered.append(c)
                 continue
 

@@ -3,6 +3,7 @@ import io
 import time
 import json
 import csv
+import math
 import secrets
 import urllib.parse
 import datetime
@@ -1501,28 +1502,117 @@ def delete_complaint_endpoint(complaint_id):
         return jsonify({'status': 'error', 'message': f"Failed to delete complaint from Google Sheets: {str(e)}"}), 500
 
 @app.route('/api/complaints', methods=['GET'])
+@app.route('/api/complaints/my', methods=['GET'])
 @login_required
 @permission_required('complaints:view')
 def list_complaints():
     """
-    Returns complaints filtered by centralized RBAC scope:
-    - Super Admin / Admin: ALL
-    - Department Head / Staff: DEPARTMENT scope
-    - User: OWN scope
+    Returns complaints respecting centralized RBAC scope.
+    Supports query parameters:
+    - scope: 'my' (assigned to or created by user), 'assigned' (assigned only), 'created' (created only), 'all' (default)
+    - department / dept: department filter
+    - status: status filter
+    - priority: priority filter
+    - search / q: full-text search across all complaint attributes
+    - page & limit: optional pagination
     """
     user = get_current_user()
     db = get_db()
     try:
-        complaints = db.get_complaints_for_user(
+        raw_scope = (request.args.get('scope') or '').strip().lower()
+        is_my_scope = request.path.endswith('/my') or raw_scope in ('my', 'assigned', 'created')
+
+        all_complaints = db.get_complaints_for_user(
             user['email'],
             user['role'],
             user_departments=user.get('departments'),
             user_dict=user
         )
+
+        filtered = []
+        for c in all_complaints:
+            # 1. Scope filter: My Records (Assigned to Me OR Created by Me)
+            if request.path.endswith('/my') or raw_scope == 'my':
+                if not (RBACService.is_handled_by_user(user, c) or RBACService.is_created_by_user(user, c)):
+                    continue
+            elif raw_scope == 'assigned':
+                if not RBACService.is_handled_by_user(user, c):
+                    continue
+            elif raw_scope == 'created':
+                if not RBACService.is_created_by_user(user, c):
+                    continue
+
+            # 2. Department filter
+            dept_arg = (request.args.get('department') or request.args.get('dept') or '').strip()
+            if dept_arg and dept_arg.upper() != 'ALL':
+                c_depts = [d.lower() for d in RBACService.parse_complaint_departments(c)]
+                if dept_arg.lower() not in c_depts:
+                    continue
+
+            # 3. Status filter
+            status_arg = (request.args.get('status') or '').strip()
+            if status_arg and status_arg.upper() != 'ALL':
+                if (c.get('Status') or '').strip().lower() != status_arg.lower():
+                    continue
+
+            # 4. Priority filter
+            prio_arg = (request.args.get('priority') or '').strip()
+            if prio_arg and prio_arg.upper() != 'ALL':
+                if (c.get('Priority') or '').strip().lower() != prio_arg.lower():
+                    continue
+
+            # 5. Search query
+            search_arg = (request.args.get('search') or request.args.get('q') or '').strip().lower()
+            if search_arg:
+                search_blob = ' '.join([
+                    str(c.get('Complaint ID') or ''),
+                    str(c.get('Customer Name') or c.get('Complainant Name') or ''),
+                    str(c.get('Customer Mobile No.') or ''),
+                    str(c.get('Invoice No.') or ''),
+                    str(c.get('Complain Types') or c.get('Subject') or ''),
+                    str(c.get('Department Name') or c.get('Department') or ''),
+                    str(c.get('From Department') or ''),
+                    str(c.get('Handled By') or c.get('Assigned To Name') or ''),
+                    str(c.get('Employee Name') or ''),
+                    str(c.get('Vendor Name') or ''),
+                    str(c.get('Salesperson Name') or ''),
+                    str(c.get('Remarks') or ''),
+                    str(c.get('Solution Given') or ''),
+                    str(c.get('Status') or '')
+                ]).lower()
+                if search_arg not in search_blob:
+                    continue
+
+            filtered.append(c)
+
+        total_records = len(filtered)
+        page = request.args.get('page', type=int)
+        limit = request.args.get('limit', type=int)
+
+        if page and limit and limit > 0:
+            total_pages = max(1, math.ceil(total_records / limit))
+            page = max(1, min(page, total_pages))
+            start = (page - 1) * limit
+            end = start + limit
+            paged = filtered[start:end]
+            return jsonify({
+                'status': 'success',
+                'complaints': paged,
+                'count': len(paged),
+                'total_records': total_records,
+                'pagination': {
+                    'page': page,
+                    'limit': limit,
+                    'total_records': total_records,
+                    'total_pages': total_pages
+                }
+            })
+
         return jsonify({
             'status': 'success',
-            'complaints': complaints,
-            'count': len(complaints)
+            'complaints': filtered,
+            'count': len(filtered),
+            'total_records': total_records
         })
     except Exception as e:
         logger.error(f"Error listing complaints: {e}")
