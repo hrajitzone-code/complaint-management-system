@@ -369,7 +369,7 @@ class SheetsDB:
             if cls.find_user_by_email(clean_email):
                 raise ValueError(f"User with email '{clean_email}' already exists.")
 
-            all_roles = [r.get('Name') for r in cls.get_all_roles() if r.get('Name')]
+            all_roles = [r.get('Name') or r.get('role_name') for r in cls.get_all_roles() if (r.get('Name') or r.get('role_name'))]
             canon_role = RBACService.canonical_role(role)
             if canon_role not in all_roles and role.strip() not in all_roles:
                 raise ValueError(f"Invalid role '{role}'. Allowed roles: {', '.join(sorted(set(all_roles)))}")
@@ -381,11 +381,25 @@ class SheetsDB:
             if not dept_str:
                 dept_str = 'General'
 
-            perms_str = custom_permissions.strip() if isinstance(custom_permissions, str) else ','.join(custom_permissions)
+            if isinstance(custom_permissions, list):
+                perms_str = ', '.join([str(p).strip() for p in custom_permissions if str(p).strip()])
+            elif custom_permissions:
+                perms_str = str(custom_permissions).strip()
+            else:
+                perms_str = ''
 
             users = cls._read_records('Users', use_cache=False)
-            user_num = len(users) + 1
-            user_id = f"USR-{user_num:04d}"
+            max_id = 0
+            for u in users:
+                uid_str = u.get('User ID') or u.get('user_id') or ''
+                if str(uid_str).startswith('USR-'):
+                    try:
+                        num = int(str(uid_str).replace('USR-', ''))
+                        if num > max_id:
+                            max_id = num
+                    except ValueError:
+                        pass
+            user_id = f"USR-{max(max_id + 1, len(users) + 1):04d}"
             pwd_hash = generate_password_hash(password)
             now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
@@ -411,13 +425,21 @@ class SheetsDB:
             cls._invalidate_cache('Users')
 
             return {
+                'user_id': user_id,
                 'User ID': user_id,
+                'full_name': full_name.strip(),
                 'Full Name': full_name.strip(),
+                'email': clean_email,
                 'Email': clean_email,
+                'role': canon_role,
                 'Role': canon_role,
+                'department': dept_str,
                 'Department': dept_str,
+                'is_active': 'TRUE',
                 'Is Active': 'TRUE',
+                'created_at': now_str,
                 'Created At': now_str,
+                'custom_permissions': perms_str,
                 'Custom Permissions': perms_str
             }
 
@@ -513,7 +535,12 @@ class SheetsDB:
             if custom_permissions is not None:
                 perm_idx = headers.index('Custom Permissions') if 'Custom Permissions' in headers else -1
                 if perm_idx >= 0:
-                    val = custom_permissions.strip() if isinstance(custom_permissions, str) else ','.join(custom_permissions)
+                    if isinstance(custom_permissions, list):
+                        val = ', '.join([str(p).strip() for p in custom_permissions if str(p).strip()])
+                    elif custom_permissions:
+                        val = str(custom_permissions).strip()
+                    else:
+                        val = ''
                     current_row[perm_idx] = sanitize_cell_value(val)
 
             if is_active is not None:

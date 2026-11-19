@@ -1126,10 +1126,10 @@ async function loadDepartments() {
 
 function populateDepartmentDropdowns() {
     // 1. Regular single-selects
-    const singleSelects = ['reg-dept', 'modal-user-dept', 'edit-user-dept', 'manage-dept-filter', 'delete-dept-reassign-select'];
+    const singleSelects = ['reg-dept', 'manage-dept-filter', 'delete-dept-reassign-select'];
     singleSelects.forEach(id => {
         const el = document.getElementById(id);
-        if (!el) return;
+        if (!el || el.tagName !== 'SELECT') return;
         const currentVal = el.value;
         const isFilter = id.includes('filter');
         el.innerHTML = isFilter ? '<option value="ALL">All Departments</option>' : '<option value="">Select Department...</option>';
@@ -2205,8 +2205,15 @@ function openCreateUserModal() {
     document.getElementById('modal-user-email').value = '';
     document.getElementById('modal-user-password').value = '';
     populateDepartmentDropdowns();
-    setMultiSelectValues('create-user', ['General']);
+
+    // Default to first active department or General
+    const defaultDept = currentDepartments.some(d => d.Name === 'General') 
+        ? ['General'] 
+        : (currentDepartments.length > 0 ? [currentDepartments[0].Name] : ['General']);
+    setMultiSelectValues('create-user', defaultDept);
+
     loadRolesDropdownForUsers();
+
     const modal = document.getElementById('create-user-modal');
     modal.style.display = 'flex';
     document.body.classList.add('modal-open');
@@ -2215,6 +2222,7 @@ function openCreateUserModal() {
         modalBody.scrollTop = 0;
     }
 }
+
 function closeCreateUserModal() {
     document.getElementById('create-user-modal').style.display = 'none';
     syncBodyModalOpen();
@@ -2222,11 +2230,26 @@ function closeCreateUserModal() {
 
 async function submitCreateUser(e) {
     e.preventDefault();
+    const submitBtn = e.target.querySelector('button[type="submit"]') || document.querySelector('#create-user-modal button[type="submit"]');
     const full_name = document.getElementById('modal-user-name').value.trim();
     const email = document.getElementById('modal-user-email').value.trim();
     const role = document.getElementById('modal-user-role').value;
-    const department = document.getElementById('modal-user-dept').value || 'General';
+    const department = document.getElementById('modal-user-dept').value.trim() || 'General';
     const password = document.getElementById('modal-user-password').value;
+
+    if (!full_name || !email || !password) {
+        showToast('Please fill in all required fields.', 'error');
+        return;
+    }
+    if (password.length < 6) {
+        showToast('Password must be at least 6 characters.', 'error');
+        return;
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Creating User...';
+    }
 
     try {
         const res = await fetch('/api/users', {
@@ -2236,14 +2259,19 @@ async function submitCreateUser(e) {
         });
         const data = await res.json();
         if (res.ok) {
-            showToast(data.message, 'success');
+            showToast(data.message || `User '${full_name}' created successfully.`, 'success');
             closeCreateUserModal();
-            loadAdminUsers();
+            await loadAdminUsers();
         } else {
             showToast(data.message || 'Failed to create user', 'error');
         }
     } catch (err) {
-        showToast('Network error creating user.', 'error');
+        showToast(`Network error: ${err.message}`, 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Create User';
+        }
     }
 }
 
@@ -4793,11 +4821,20 @@ async function loadRolesDropdownForUsers() {
                               (r.is_system_role !== undefined) ? !!r.is_system_role : 
                               (String(r['Is System Role']).toUpperCase() === 'TRUE');
                 const systemBadge = isSys ? ' (System)' : '';
-                return `<option value="${escapeHtml(roleName)}" ${disabled} ${isSuper ? 'id="opt-edit-role-super-admin"' : ''}>${escapeHtml(roleName)}${systemBadge}</option>`;
+                const superIdAttr = (isSuper && dropdownId === 'edit-user-role') ? 'id="opt-edit-role-super-admin"' : '';
+                return `<option value="${escapeHtml(roleName)}" ${disabled} ${superIdAttr}>${escapeHtml(roleName)}${systemBadge}</option>`;
             }).join('');
 
-            if (currentVal && Array.from(el.options).some(o => o.value === currentVal)) {
+            if (currentVal && Array.from(el.options).some(o => o.value === currentVal && !o.disabled)) {
                 el.value = currentVal;
+            } else {
+                const staffOpt = Array.from(el.options).find(o => o.value === 'Department Staff' && !o.disabled);
+                if (staffOpt) {
+                    el.value = 'Department Staff';
+                } else {
+                    const firstEnabled = Array.from(el.options).find(o => !o.disabled);
+                    if (firstEnabled) el.value = firstEnabled.value;
+                }
             }
         });
     } catch (e) {

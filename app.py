@@ -1812,7 +1812,14 @@ def admin_create_user():
     else:
         department = str(raw_dept).strip()
 
-    custom_permissions = data.get('custom_permissions')
+    raw_perms = data.get('custom_permissions')
+    if isinstance(raw_perms, list):
+        custom_permissions = ', '.join([str(p).strip() for p in raw_perms if str(p).strip()])
+    elif raw_perms:
+        custom_permissions = str(raw_perms).strip()
+    else:
+        custom_permissions = ''
+
     current_user = get_current_user()
     db = get_db()
 
@@ -1832,6 +1839,9 @@ def admin_create_user():
 
     if not full_name or not email or not password:
         return jsonify({'status': 'error', 'message': 'Full name, email, and password are required.'}), 400
+
+    if len(password) < 6:
+        return jsonify({'status': 'error', 'message': 'Password must be at least 6 characters.'}), 400
 
     try:
         user = db.create_user(
