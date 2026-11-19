@@ -83,17 +83,11 @@ def permission_required(permission_id):
                 session.clear()
                 return jsonify({'status': 'error', 'message': 'Account is disabled or archived.'}), 403
 
-            canon_role = RBACService.canonical_role(u.get('role'))
-            if canon_role == 'Super Admin':
-                return f(*args, **kwargs)
-
-            user_perms = set(u.get('permissions') or [])
-            if permission_id not in user_perms:
-                if not RBACService.has_permission(u, permission_id):
-                    return jsonify({
-                        'status': 'error',
-                        'message': f"Access forbidden. Required permission: '{permission_id}'."
-                    }), 403
+            if not RBACService.has_permission(u, permission_id):
+                return jsonify({
+                    'status': 'error',
+                    'message': f"Access forbidden. Required permission: '{permission_id}'."
+                }), 403
 
             return f(*args, **kwargs)
         return decorated
@@ -198,12 +192,19 @@ def verify_and_login_user(email, password, db_engine):
 def refresh_user_session(user_id_or_email, db_engine):
     """
     Refreshes the permissions and department scope stored in session for the active user.
+    If user is deactivated or missing, immediately purges session and returns None.
     """
     u = get_current_user()
     if not u:
         return None
     user_record = db_engine.find_user_by_email(user_id_or_email) or db_engine.find_user_by_id(user_id_or_email)
     if not user_record:
+        session.clear()
+        return None
+
+    is_active_val = str(user_record.get('Is Active', 'TRUE')).upper()
+    if is_active_val not in ('TRUE', '1', 'YES'):
+        session.clear()
         return None
 
     canon_role = RBACService.canonical_role(user_record.get('Role', 'User'))
@@ -227,7 +228,7 @@ def refresh_user_session(user_id_or_email, db_engine):
         'permissions': effective_perms,
         'data_scope': data_scope,
         'custom_permissions': user_record.get('Custom Permissions', ''),
-        'is_active': str(user_record.get('Is Active', 'TRUE')).upper()
+        'is_active': is_active_val
     }
     session['user'] = user_data
     return user_data

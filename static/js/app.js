@@ -15,6 +15,8 @@ let auditSearchDebounceTimer = null;
 
 function hasPermission(permissionId) {
     if (!currentUser) return false;
+    const active = String(currentUser.is_active || 'TRUE').toUpperCase();
+    if (active !== 'TRUE' && active !== '1' && active !== 'YES') return false;
     if (currentUser.role === 'Super Admin') return true;
     const perms = currentUser.permissions || [];
     if (perms.includes('*') || perms.includes(permissionId)) return true;
@@ -263,14 +265,16 @@ function handleHashRouting() {
 
 function switchView(viewName) {
     if (currentUser) {
-        const isStaffOrAdmin = ['Super Admin', 'Admin', 'Support Staff'].includes(currentUser.role);
-        const isAdmin = ['Super Admin', 'Admin'].includes(currentUser.role);
-        const canManage = hasPermission('complaints:update_status') || hasPermission('complaints:assign') || ['Super Admin', 'Admin', 'Department Head', 'Department Staff', 'Support Staff'].includes(currentUser.role);
-        const canSettings = hasPermission('users:view') || ['Super Admin', 'Admin'].includes(currentUser.role);
-        const canMaster = hasPermission('master_data:view') || ['Super Admin', 'Admin'].includes(currentUser.role);
-        const canRoles = hasPermission('roles:view') || currentUser.role === 'Super Admin';
-        const canAudit = hasPermission('audit_logs:view') || ['Super Admin', 'Admin'].includes(currentUser.role);
+        const canLodge = hasPermission('complaints:create');
+        const canReports = hasPermission('reports:view');
+        const canManage = hasPermission('complaints:change_status') || hasPermission('complaints:assign');
+        const canSettings = hasPermission('users:view') || hasPermission('settings:view') || hasPermission('departments:view');
+        const canMaster = hasPermission('master_data:view') || hasPermission('master_data:manage');
+        const canRoles = hasPermission('roles:view') || hasPermission('roles:manage');
+        const canAudit = hasPermission('audit_logs:view') || hasPermission('audit_logs:export');
 
+        if (viewName === 'lodge' && !canLodge) viewName = 'dashboard';
+        if (viewName === 'reports' && !canReports) viewName = 'dashboard';
         if (viewName === 'manage' && !canManage) viewName = 'dashboard';
         if (viewName === 'settings' && !canSettings) viewName = 'dashboard';
         if (viewName === 'master-data' && !canMaster) viewName = 'dashboard';
@@ -431,16 +435,24 @@ function renderUserInterface() {
     document.getElementById('user-display-role').textContent = currentUser.role;
 
     // Granular RBAC Nav Visibility
-    const isSuperAdmin = currentUser.role === 'Super Admin';
-    const canManageComplaints = hasPermission('complaints:update_status') || hasPermission('complaints:assign') || ['Super Admin', 'Admin', 'Department Head', 'Department Staff', 'Support Staff'].includes(currentUser.role);
-    const canAdmin = isSuperAdmin || hasPermission('users:view') || hasPermission('settings:view') || ['Super Admin', 'Admin'].includes(currentUser.role);
-    const canRoles = isSuperAdmin || hasPermission('roles:view');
-    const canAudit = hasPermission('audit_logs:view') || isSuperAdmin || currentUser.role === 'Admin';
-    const canMaster = hasPermission('master_data:view') || isSuperAdmin || currentUser.role === 'Admin';
+    const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
+    const canLodge = hasPermission('complaints:create');
+    const canReports = hasPermission('reports:view');
+    const canManageComplaints = hasPermission('complaints:change_status') || hasPermission('complaints:assign');
+    const canMaster = hasPermission('master_data:view') || hasPermission('master_data:manage');
+    const canUsersOrSettings = hasPermission('users:view') || hasPermission('settings:view') || hasPermission('departments:view');
+    const canRoles = hasPermission('roles:view') || hasPermission('roles:manage');
+    const canAudit = hasPermission('audit_logs:view') || hasPermission('audit_logs:export');
+
+    const lodgeNav = document.querySelector('.nav-item[data-view="lodge"]');
+    if (lodgeNav) lodgeNav.style.display = canLodge ? 'block' : 'none';
+
+    const reportsNav = document.querySelector('.nav-item[data-view="reports"]');
+    if (reportsNav) reportsNav.style.display = canReports ? 'block' : 'none';
 
     document.querySelectorAll('.staff-only').forEach(el => el.style.display = canManageComplaints ? 'block' : 'none');
-    document.querySelectorAll('.admin-only').forEach(el => el.style.display = canAdmin ? 'block' : 'none');
-    document.querySelectorAll('.super-admin-only').forEach(el => el.style.display = isSuperAdmin ? 'block' : 'none');
+    document.querySelectorAll('.admin-only').forEach(el => el.style.display = canUsersOrSettings ? 'block' : 'none');
+    document.querySelectorAll('.super-admin-only').forEach(el => el.style.display = canRoles ? 'block' : 'none');
 
     // Individual Nav Links
     const rolesNav = document.querySelector('.nav-item[data-view="roles"]');
@@ -451,6 +463,9 @@ function renderUserInterface() {
 
     const masterNav = document.querySelector('.nav-item[data-view="master-data"]');
     if (masterNav) masterNav.style.display = canMaster ? 'block' : 'none';
+
+    const settingsNav = document.querySelector('.nav-item[data-view="settings"]');
+    if (settingsNav) settingsNav.style.display = canUsersOrSettings ? 'block' : 'none';
 }
 
 async function handleLogin(e) {
@@ -1411,11 +1426,13 @@ function renderMyComplaintsTable(complaints) {
         return;
     }
 
-    const isAdmin = currentUser && ['Super Admin', 'Admin'].includes(currentUser.role);
-    const isStaffOrAdmin = currentUser && ['Super Admin', 'Admin', 'Support Staff'].includes(currentUser.role);
+    const canDelete = hasPermission('complaints:delete');
+    const canEditAny = hasPermission('complaints:edit');
+    const isStaffOrAdmin = ['Super Admin', 'Admin', 'Department Head', 'Department Staff'].includes(currentUser?.role);
 
     tbody.innerHTML = complaints.map(c => {
-        const canEdit = isStaffOrAdmin || (c.Status === 'Submitted');
+        const isOwner = currentUser && (c['Complainant Email'] || '').toLowerCase() === (currentUser.email || '').toLowerCase();
+        const canEdit = canEditAny && (isStaffOrAdmin || (isOwner && (c.Status || '').toLowerCase() === 'submitted'));
         return `
             <tr>
                 <td><strong><code>${c['Complaint ID']}</code></strong></td>
@@ -1431,7 +1448,7 @@ function renderMyComplaintsTable(complaints) {
                     <div class="table-row-actions">
                         <button class="btn btn-secondary btn-sm" onclick="openComplaintModal('${c['Complaint ID']}')">View</button>
                         ${canEdit ? `<button class="btn btn-warning btn-sm" onclick="openEditComplaintModal('${c['Complaint ID']}')">Edit</button>` : ''}
-                        ${isAdmin ? `<button class="btn btn-outline-danger btn-sm" onclick="openDeleteModal('${c['Complaint ID']}')">Delete</button>` : ''}
+                        ${canDelete ? `<button class="btn btn-outline-danger btn-sm" onclick="openDeleteModal('${c['Complaint ID']}')">Delete</button>` : ''}
                     </div>
                 </td>
             </tr>
@@ -1490,7 +1507,8 @@ function renderManageTable(complaints) {
         return;
     }
 
-    const isAdmin = currentUser && ['Super Admin', 'Admin'].includes(currentUser.role);
+    const canDelete = hasPermission('complaints:delete');
+    const canEdit = hasPermission('complaints:edit');
 
     tbody.innerHTML = complaints.map(c => `
         <tr>
@@ -1506,8 +1524,8 @@ function renderManageTable(complaints) {
             <td>
                 <div class="table-row-actions">
                     <button class="btn btn-secondary btn-sm" onclick="openComplaintModal('${c['Complaint ID']}')">View</button>
-                    <button class="btn btn-warning btn-sm" onclick="openEditComplaintModal('${c['Complaint ID']}')">Edit</button>
-                    ${isAdmin ? `<button class="btn btn-outline-danger btn-sm" onclick="openDeleteModal('${c['Complaint ID']}')">Delete</button>` : ''}
+                    ${canEdit ? `<button class="btn btn-warning btn-sm" onclick="openEditComplaintModal('${c['Complaint ID']}')">Edit</button>` : ''}
+                    ${canDelete ? `<button class="btn btn-outline-danger btn-sm" onclick="openDeleteModal('${c['Complaint ID']}')">Delete</button>` : ''}
                 </div>
             </td>
         </tr>
@@ -1630,28 +1648,56 @@ function renderComplaintModalData(complaint, history, comments) {
     }
 
     // Permissions for Edit & Delete buttons
-    const isStaffOrAdmin = currentUser && ['Super Admin', 'Admin', 'Support Staff'].includes(currentUser.role);
-    const isAdmin = currentUser && ['Super Admin', 'Admin'].includes(currentUser.role);
+    const canDelete = hasPermission('complaints:delete');
+    const canEditAny = hasPermission('complaints:edit');
     const isOwner = currentUser && (complaint['Complainant Email'] || '').toLowerCase() === (currentUser.email || '').toLowerCase();
     const isSubmitted = (complaint.Status || '').toLowerCase() === 'submitted';
+    const isStaffOrAdmin = ['Super Admin', 'Admin', 'Department Head', 'Department Staff'].includes(currentUser?.role);
 
     const editBtn = document.getElementById('modal-btn-edit');
     if (editBtn) {
-        editBtn.style.display = (isStaffOrAdmin || (isOwner && isSubmitted)) ? 'inline-flex' : 'none';
+        editBtn.style.display = (canEditAny && (isStaffOrAdmin || (isOwner && isSubmitted))) ? 'inline-flex' : 'none';
     }
 
     const deleteBtn = document.getElementById('modal-btn-delete');
     if (deleteBtn) {
-        deleteBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+        deleteBtn.style.display = canDelete ? 'inline-flex' : 'none';
     }
 
     // Staff Controls
+    const canChangeStatus = hasPermission('complaints:change_status') || hasPermission('complaints:close') || hasPermission('complaints:reopen');
+    const canAssign = hasPermission('complaints:assign');
     const staffBox = document.getElementById('modal-staff-controls');
-    staffBox.style.display = isStaffOrAdmin ? 'block' : 'none';
+    if (staffBox) {
+        staffBox.style.display = (canChangeStatus || canAssign) ? 'block' : 'none';
+        const statusRow = document.getElementById('modal-status-select')?.closest('.form-group');
+        if (statusRow) statusRow.style.display = canChangeStatus ? 'block' : 'none';
+        const assignRow = document.getElementById('modal-assign-select')?.closest('.form-group');
+        if (assignRow) assignRow.style.display = canAssign ? 'block' : 'none';
+        const remarksInput = document.getElementById('modal-status-remarks')?.closest('.form-group');
+        if (remarksInput) remarksInput.style.display = canChangeStatus ? 'block' : 'none';
 
-    if (isStaffOrAdmin) {
-        document.getElementById('modal-status-select').value = complaint.Status || 'Submitted';
-        populateAssignSelect();
+        if (canChangeStatus) {
+            document.getElementById('modal-status-select').value = complaint.Status || 'Submitted';
+        }
+        if (canAssign) {
+            populateAssignSelect();
+        }
+    }
+
+    // Comments Form & Type Controls
+    const commentForm = document.getElementById('modal-comment-form');
+    if (commentForm) {
+        const canComment = hasPermission('comments:add') || hasPermission('comments:add_internal');
+        commentForm.style.display = canComment ? 'block' : 'none';
+    }
+    const commentTypeSelect = document.getElementById('modal-comment-type');
+    if (commentTypeSelect) {
+        const canInternal = hasPermission('comments:add_internal');
+        commentTypeSelect.style.display = canInternal ? 'inline-block' : 'none';
+        if (!canInternal) {
+            commentTypeSelect.value = 'Public Update';
+        }
     }
 
     // Timeline History
@@ -2001,7 +2047,7 @@ async function loadStaffUsersList() {
         const res = await fetch('/api/users');
         if (res.ok) {
             const data = await res.json();
-            allStaffUsers = (data.users || []).filter(u => ['Super Admin', 'Admin', 'Support Staff'].includes(u.Role));
+            allStaffUsers = (data.users || []).filter(u => ['Super Admin', 'Admin', 'Department Head', 'Department Staff', 'Support Staff'].includes(u.Role));
         }
     } catch (e) {
         allStaffUsers = [];
@@ -3438,8 +3484,10 @@ function renderReportTable() {
 }
 
 function renderReportTableRow(c, cols) {
-    const isStaffOrAdmin = currentUser && ['Super Admin', 'Admin', 'Support Staff'].includes(currentUser.role);
-    const canEdit = isStaffOrAdmin || (c.Status === 'Submitted');
+    const canEditAny = hasPermission('complaints:edit');
+    const isOwner = currentUser && (c['Complainant Email'] || '').toLowerCase() === (currentUser.email || '').toLowerCase();
+    const isStaffOrAdmin = ['Super Admin', 'Admin', 'Department Head', 'Department Staff'].includes(currentUser?.role);
+    const canEdit = canEditAny && (isStaffOrAdmin || (isOwner && (c.Status || '').toLowerCase() === 'submitted'));
 
     const cellsHtml = cols.map(cId => {
         const val = c[cId] || '-';

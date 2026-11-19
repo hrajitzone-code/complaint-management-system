@@ -544,6 +544,8 @@ def disconnect_drive_oauth():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/drive/download/<file_id>', methods=['GET'])
+@login_required
+@permission_required('attachments:view')
 def download_drive_file(file_id):
     """Streams an attachment file from Google Drive directly to the user."""
     try:
@@ -559,6 +561,8 @@ def download_drive_file(file_id):
         return jsonify({'status': 'error', 'message': f"Could not download file: {str(e)}"}), 404
 
 @app.route('/api/drive/view/<file_id>', methods=['GET'])
+@login_required
+@permission_required('attachments:view')
 def view_drive_file(file_id):
     """Redirects to the Google Drive preview link for the file."""
     return redirect(f"https://drive.google.com/file/d/{file_id}/view?usp=drivesdk")
@@ -783,6 +787,22 @@ def auth_me():
     u = get_current_user()
     if not u:
         return jsonify({'status': 'error', 'message': 'Not authenticated.'}), 401
+
+    # Live refresh against Google Sheets Users database to prevent stale permissions / deactivated accounts
+    db = get_db()
+    try:
+        user_identifier = u.get('user_id') or u.get('email')
+        updated_user = refresh_user_session(user_identifier, db)
+        if not updated_user:
+            session.clear()
+            return jsonify({'status': 'error', 'message': 'Account is inactive, archived, or removed.'}), 403
+        u = updated_user
+    except Exception as e:
+        logger.warning(f"Could not live refresh user session in /api/auth/me: {e}")
+        if str(u.get('is_active', 'TRUE')).upper() not in ('TRUE', '1', 'YES'):
+            session.clear()
+            return jsonify({'status': 'error', 'message': 'Account is inactive or archived.'}), 403
+
     return jsonify({'status': 'success', 'user': u})
 
 # =============================================================================
@@ -835,7 +855,8 @@ def get_department_usage_endpoint(dept_id):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/departments', methods=['POST'])
-@admin_required
+@login_required
+@permission_required('departments:create')
 def create_department():
     """Admin creates a new complaint department."""
     data = request.get_json(silent=True) or request.form or {}
@@ -874,7 +895,8 @@ def create_department():
         return jsonify({'status': 'error', 'message': f"Failed to create department: {str(e)}"}), 500
 
 @app.route('/api/departments/<dept_id>', methods=['PUT'])
-@admin_required
+@login_required
+@permission_required('departments:edit')
 def update_department_endpoint(dept_id):
     """Admin updates department details."""
     data = request.get_json(silent=True) or request.form or {}
@@ -908,7 +930,8 @@ def update_department_endpoint(dept_id):
 
 @app.route('/api/departments/<dept_id>', methods=['DELETE'])
 @app.route('/api/departments/<dept_id>/delete', methods=['POST'])
-@admin_required
+@login_required
+@permission_required('departments:delete')
 def delete_department_endpoint(dept_id):
     """
     Admin deletes a department.
@@ -988,7 +1011,8 @@ def get_complaint_type(type_id):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/master/complaint-types/<type_id>/usage', methods=['GET'])
-@admin_required
+@login_required
+@permission_required('master_data:manage')
 def get_complaint_type_usage_endpoint(type_id):
     """Checks complaint type usage in complaints before deletion."""
     db = get_db()
@@ -1008,7 +1032,8 @@ def get_complaint_type_usage_endpoint(type_id):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/master/complaint-types', methods=['POST'])
-@admin_required
+@login_required
+@permission_required('master_data:manage')
 def create_complaint_type_endpoint():
     """Admin creates a new complaint type."""
     data = request.get_json(silent=True) or request.form or {}
@@ -1029,7 +1054,8 @@ def create_complaint_type_endpoint():
         return jsonify({'status': 'error', 'message': f"Failed to create complaint type: {str(e)}"}), 500
 
 @app.route('/api/master/complaint-types/<type_id>', methods=['PUT'])
-@admin_required
+@login_required
+@permission_required('master_data:manage')
 def update_complaint_type_endpoint(type_id):
     """Admin updates complaint type details or toggles active status."""
     data = request.get_json(silent=True) or request.form or {}
@@ -1056,7 +1082,8 @@ def update_complaint_type_endpoint(type_id):
 
 @app.route('/api/master/complaint-types/<type_id>', methods=['DELETE'])
 @app.route('/api/master/complaint-types/<type_id>/delete', methods=['POST'])
-@admin_required
+@login_required
+@permission_required('master_data:manage')
 def delete_complaint_type_endpoint(type_id):
     """
     Admin deletes a complaint type.
@@ -1099,7 +1126,8 @@ def get_salesperson(sp_id):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/master/salespersons/<sp_id>/usage', methods=['GET'])
-@admin_required
+@login_required
+@permission_required('master_data:manage')
 def get_salesperson_usage_endpoint(sp_id):
     """Checks salesperson usage in complaints before deletion."""
     db = get_db()
@@ -1119,7 +1147,8 @@ def get_salesperson_usage_endpoint(sp_id):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/master/salespersons', methods=['POST'])
-@admin_required
+@login_required
+@permission_required('master_data:manage')
 def create_salesperson_endpoint():
     """Admin creates a new salesperson."""
     data = request.get_json(silent=True) or request.form or {}
@@ -1141,7 +1170,8 @@ def create_salesperson_endpoint():
         return jsonify({'status': 'error', 'message': f"Failed to create salesperson: {str(e)}"}), 500
 
 @app.route('/api/master/salespersons/<sp_id>', methods=['PUT'])
-@admin_required
+@login_required
+@permission_required('master_data:manage')
 def update_salesperson_endpoint(sp_id):
     """Admin updates salesperson details or toggles active status."""
     data = request.get_json(silent=True) or request.form or {}
@@ -1169,7 +1199,8 @@ def update_salesperson_endpoint(sp_id):
 
 @app.route('/api/master/salespersons/<sp_id>', methods=['DELETE'])
 @app.route('/api/master/salespersons/<sp_id>/delete', methods=['POST'])
-@admin_required
+@login_required
+@permission_required('master_data:manage')
 def delete_salesperson_endpoint(sp_id):
     """
     Admin deletes a salesperson.
@@ -1191,6 +1222,7 @@ def delete_salesperson_endpoint(sp_id):
 
 @app.route('/api/complaints', methods=['POST'])
 @login_required
+@permission_required('complaints:create')
 def lodge_complaint():
     """
     Lodges a new complaint with all 21 fields, unique ID, timestamp, and optional attachment.
@@ -1560,7 +1592,16 @@ def update_status(complaint_id):
     except Exception:
         custom_roles = None
 
-    allowed, reason = RBACService.can_access_complaint(user, c, action='change_status', custom_roles=custom_roles)
+    # Determine specific workflow action (change_status vs close vs reopen)
+    curr_status = c.get('Status') or 'Submitted'
+    if new_status == 'Closed':
+        action = 'close'
+    elif curr_status == 'Closed' and new_status != 'Closed':
+        action = 'reopen'
+    else:
+        action = 'change_status'
+
+    allowed, reason = RBACService.can_access_complaint(user, c, action=action, custom_roles=custom_roles)
     if not allowed:
         return jsonify({'status': 'error', 'message': reason}), 403
 
@@ -1666,7 +1707,6 @@ def assign_complaint(complaint_id):
 
 @app.route('/api/complaints/<complaint_id>/comments', methods=['POST'])
 @login_required
-@permission_required('comments:view')
 def add_comment(complaint_id):
     """Adds a comment / note to a complaint."""
     user = get_current_user()
@@ -1693,10 +1733,16 @@ def add_comment(complaint_id):
 
     if comment_type == 'Internal Note':
         if not RBACService.has_permission(user, 'comments:add_internal', custom_roles=custom_roles):
-            comment_type = 'Public Update'
+            return jsonify({
+                'status': 'error',
+                'message': "Access forbidden. Required permission: 'comments:add_internal'."
+            }), 403
     else:
         if not RBACService.has_permission(user, 'comments:add', custom_roles=custom_roles):
-            return jsonify({'status': 'error', 'message': 'Access forbidden. Permission to add comments required.'}), 403
+            return jsonify({
+                'status': 'error',
+                'message': "Access forbidden. Required permission: 'comments:add'."
+            }), 403
 
     try:
         new_comment = db.add_comment(
@@ -1898,12 +1944,12 @@ def update_user_endpoint(user_id):
     if not allowed:
         return jsonify({'status': 'error', 'message': reason}), 403
 
-    # Self-deactivation guard
+    # Self-deactivation and self-role escalation guard
     if current_user.get('user_id') == user_id:
         if is_active is not None and str(is_active).upper() in ('FALSE', '0', 'NO'):
             return jsonify({'status': 'error', 'message': 'You cannot deactivate your own active account.'}), 400
-        if target_is_super and role_cfg['name'] != 'Super Admin':
-            return jsonify({'status': 'error', 'message': 'You cannot remove your own Super Admin role.'}), 400
+        if role_cfg['name'] != target_user.get('Role'):
+            return jsonify({'status': 'error', 'message': 'You cannot change your own user role.'}), 403
 
     # Last Super Admin deactivation guard
     if target_is_super and is_active is not None and str(is_active).upper() in ('FALSE', '0', 'NO'):
@@ -2516,6 +2562,7 @@ def _extract_report_filters(req_source):
 
 @app.route('/api/reports', methods=['GET', 'POST'])
 @login_required
+@permission_required('reports:view')
 def get_reports_data():
     """
     Returns filtered complaint records, analytical aggregations, and KPI summaries.
@@ -2536,8 +2583,13 @@ def get_reports_data():
     page_size = req_source.get('page_size', 25)
 
     try:
-        # 1. Fetch complaints from persistent Google Sheets database
-        all_complaints = db.get_complaints_for_user(user['email'], user['role'])
+        # 1. Fetch complaints from persistent Google Sheets database with department scoping
+        all_complaints = db.get_complaints_for_user(
+            user['email'],
+            user['role'],
+            user_departments=user.get('departments'),
+            user_dict=user
+        )
 
         # 2. Enforce RBAC security
         rbac_complaints = ReportService.filter_by_rbac(all_complaints, user)
@@ -2581,6 +2633,7 @@ def get_reports_data():
 
 @app.route('/api/reports/export/<export_format>', methods=['GET', 'POST'])
 @login_required
+@permission_required('reports:view')
 def export_reports(export_format):
     """
     Exports live filtered complaint records in Excel (.xlsx), CSV (.csv), or PDF (.pdf) format.
@@ -2592,6 +2645,19 @@ def export_reports(export_format):
     fmt = str(export_format).lower().strip()
     if fmt not in ('excel', 'xlsx', 'csv', 'pdf'):
         return jsonify({'status': 'error', 'message': f"Unsupported export format '{export_format}'."}), 400
+
+    export_perm_map = {
+        'excel': 'reports:export_excel',
+        'xlsx': 'reports:export_excel',
+        'csv': 'reports:export_csv',
+        'pdf': 'reports:export_pdf'
+    }
+    required_export_perm = export_perm_map.get(fmt)
+    if required_export_perm and not RBACService.has_permission(user, required_export_perm):
+        return jsonify({
+            'status': 'error',
+            'message': f"Access forbidden. Permission '{required_export_perm}' required to export reports in {fmt.upper()} format."
+        }), 403
 
     if request.method == 'POST':
         req_source = request.get_json(silent=True) or request.form
@@ -2619,8 +2685,13 @@ def export_reports(export_format):
         resolved_columns = [col for col in ALL_REPORT_COLUMNS if col['default']]
 
     try:
-        # 1. Fetch complaints from persistent Google Sheets database
-        all_complaints = db.get_complaints_for_user(user['email'], user['role'])
+        # 1. Fetch complaints from persistent Google Sheets database with department scoping
+        all_complaints = db.get_complaints_for_user(
+            user['email'],
+            user['role'],
+            user_departments=user.get('departments'),
+            user_dict=user
+        )
 
         # 2. RBAC filter
         rbac_complaints = ReportService.filter_by_rbac(all_complaints, user)
