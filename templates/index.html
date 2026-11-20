@@ -553,6 +553,28 @@
                                     <option value="ALL">All Departments</option>
                                 </select>
                             </div>
+                            <!-- Searchable Multi-Select From Department Dropdown -->
+                            <div>
+                                <div class="multi-select-container" id="my-from-dept-multi-select" style="min-width: 175px;">
+                                    <button type="button" class="multi-select-toggle" id="my-from-dept-toggle" onclick="toggleMyFromDeptDropdown(event)" title="Filter by From Department (Online, Offline, Packing, None)" style="min-height: 38px; padding: 6px 12px; font-size: 0.85rem;">
+                                        <span class="multi-select-label" id="my-from-dept-label">From Dept: All</span>
+                                        <span class="multi-select-arrow">&#9662;</span>
+                                    </button>
+                                    <div class="multi-select-dropdown" id="my-from-dept-dropdown" style="display: none; min-width: 220px; z-index: 1060;">
+                                        <div class="multi-select-header">
+                                            <input type="text" class="multi-select-search" id="my-from-dept-search" placeholder="Search From Dept..." oninput="filterMyFromDeptOptions()">
+                                            <div class="multi-select-actions">
+                                                <button type="button" class="btn-link-action" onclick="selectAllFromDept()">All</button>
+                                                <span class="action-sep">|</span>
+                                                <button type="button" class="btn-link-action" onclick="clearAllFromDept()">Clear</button>
+                                            </div>
+                                        </div>
+                                        <div class="multi-select-options" id="my-from-dept-options">
+                                            <!-- Populated dynamically with Online, Offline, Packing, None -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                             <div>
                                 <select id="my-status-filter" class="filter-select" title="Filter by Status">
                                     <option value="ALL">All Statuses</option>

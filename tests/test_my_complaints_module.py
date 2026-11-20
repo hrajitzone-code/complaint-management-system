@@ -6,6 +6,8 @@ Covers:
 - Endpoint GET /api/complaints/my and GET /api/complaints?scope=my
 - Scope filtering: my, assigned, created
 - Filter criteria: department, status, priority, full-text search
+- From Department filter: Online, Offline, Packing, None (single and multi-selection)
+- Combined filters: From Dept + Status + Priority + Department + Search
 - Pagination: page, limit, total_records, total_pages
 - Role: Complaint Executive (Nita Chaudhary / ajitzonealleditor@gmail.com)
 - Cross-department security isolation
@@ -173,13 +175,13 @@ class TestMyComplaintsModule(unittest.TestCase):
         self.assertFalse(RBACService.is_my_complaint(self.executive_user, c_other))
 
     # =========================================================================
-    # 2. INTEGRATION TESTS: GET /api/complaints/my and GET /api/complaints?scope=my
+    # 2. INTEGRATION TESTS: GET /api/complaints/my and Query Filters
     # =========================================================================
 
     def _seed_test_complaints(self):
         """Seeds a diverse set of test complaints in MockSheetsDB."""
         complaints = [
-            # C-01: Assigned to Nita, Created by Nita, Kurti dept, High prio, Under Review
+            # C-01: Assigned to Nita, Created by Nita, Kurti dept, High prio, Under Review, From Department: Online
             {
                 'Complaint ID': 'CMP-TEST-01',
                 'Customer Name': 'Anjali Gupta',
@@ -196,7 +198,7 @@ class TestMyComplaintsModule(unittest.TestCase):
                 'Remarks': 'Needs urgent replacement',
                 'Timestamp': '2026-11-19 10:00:00'
             },
-            # C-02: Assigned to Nita, Created by Ramesh (User), Saree dept, Medium prio, In Progress
+            # C-02: Assigned to Nita, Created by Ramesh (User), Saree dept, Medium prio, In Progress, From Department: Offline
             {
                 'Complaint ID': 'CMP-TEST-02',
                 'Customer Name': 'Sneha Rao',
@@ -213,7 +215,7 @@ class TestMyComplaintsModule(unittest.TestCase):
                 'Remarks': 'Fabric sent to lab',
                 'Timestamp': '2026-11-19 11:00:00'
             },
-            # C-03: Created by Nita, Handled by Pooja, Dress Material dept, Low prio, Closed
+            # C-03: Created by Nita, Handled by Pooja, Dress Material dept, Low prio, Closed, From Department: Packing
             {
                 'Complaint ID': 'CMP-TEST-03',
                 'Customer Name': 'Deepak Sharma',
@@ -263,6 +265,23 @@ class TestMyComplaintsModule(unittest.TestCase):
                 'Status': 'Resolved',
                 'Remarks': 'Repaired',
                 'Timestamp': '2026-11-19 14:00:00'
+            },
+            # C-06: Assigned to Nita, Created by Ramesh, Kurti dept, Urgent prio, Submitted, From Department: None
+            {
+                'Complaint ID': 'CMP-TEST-06',
+                'Customer Name': 'Kavita Singh',
+                'Complainant Email': 'ramesh@customer.com',
+                'Customer Mobile No.': '9876500006',
+                'Invoice No.': 'INV-006',
+                'Complain Types': 'Fabric Defect',
+                'Department Name': 'Kurti',
+                'From Department': 'None',
+                'Handled By': 'NITA',
+                'Employee Name': 'Counter Staff',
+                'Priority': 'Urgent',
+                'Status': 'Submitted',
+                'Remarks': 'Needs supervisor check',
+                'Timestamp': '2026-11-19 15:00:00'
             }
         ]
         MockSheetsDB._store['Complaints'].extend(complaints)
@@ -280,15 +299,16 @@ class TestMyComplaintsModule(unittest.TestCase):
         self.assertEqual(data.get('status'), 'success')
         complaints = data.get('complaints', [])
 
-        # Executive Nita should see C-01 (handled & created), C-02 (handled), C-03 (created)
+        # Executive Nita should see C-01, C-02, C-03, C-06 (handled or created)
         # Should NOT see C-04 or C-05 in My Complaints
         comp_ids = [c['Complaint ID'] for c in complaints]
         self.assertIn('CMP-TEST-01', comp_ids)
         self.assertIn('CMP-TEST-02', comp_ids)
         self.assertIn('CMP-TEST-03', comp_ids)
+        self.assertIn('CMP-TEST-06', comp_ids)
         self.assertNotIn('CMP-TEST-04', comp_ids)
         self.assertNotIn('CMP-TEST-05', comp_ids)
-        self.assertEqual(len(complaints), 3)
+        self.assertEqual(len(complaints), 4)
 
     def test_api_complaints_scope_query_param(self):
         self._seed_test_complaints()
@@ -301,55 +321,136 @@ class TestMyComplaintsModule(unittest.TestCase):
         self.assertEqual(res_my.status_code, 200)
         data_my = res_my.get_json()
         ids_my = [c['Complaint ID'] for c in data_my['complaints']]
-        self.assertEqual(set(ids_my), {'CMP-TEST-01', 'CMP-TEST-02', 'CMP-TEST-03'})
+        self.assertEqual(set(ids_my), {'CMP-TEST-01', 'CMP-TEST-02', 'CMP-TEST-03', 'CMP-TEST-06'})
 
-        # 2. GET /api/complaints?scope=assigned (Only handled by Nita: C-01, C-02)
+        # 2. GET /api/complaints?scope=assigned (Handled by Nita: C-01, C-02, C-06)
         res_assigned = self.client.get('/api/complaints?scope=assigned')
         self.assertEqual(res_assigned.status_code, 200)
         data_assigned = res_assigned.get_json()
         ids_assigned = [c['Complaint ID'] for c in data_assigned['complaints']]
-        self.assertEqual(set(ids_assigned), {'CMP-TEST-01', 'CMP-TEST-02'})
+        self.assertEqual(set(ids_assigned), {'CMP-TEST-01', 'CMP-TEST-02', 'CMP-TEST-06'})
 
-        # 3. GET /api/complaints?scope=created (Only created by Nita: C-01, C-03)
+        # 3. GET /api/complaints?scope=created (Created by Nita: C-01, C-03)
         res_created = self.client.get('/api/complaints?scope=created')
         self.assertEqual(res_created.status_code, 200)
         data_created = res_created.get_json()
         ids_created = [c['Complaint ID'] for c in data_created['complaints']]
         self.assertEqual(set(ids_created), {'CMP-TEST-01', 'CMP-TEST-03'})
 
-    def test_api_my_complaints_filtering_by_dept_status_priority_search(self):
-        self._seed_test_complaints()
+    # =========================================================================
+    # 3. FROM DEPARTMENT FILTER TESTS (Online, Offline, Packing, None)
+    # =========================================================================
 
+    def test_from_department_single_filter_online(self):
+        self._seed_test_complaints()
         with self.client.session_transaction() as sess:
             sess['user'] = self.executive_user
 
-        # Department filter: Kurti (only C-01 matches)
-        res_dept = self.client.get('/api/complaints/my?department=Kurti')
-        self.assertEqual(res_dept.status_code, 200)
-        data_dept = res_dept.get_json()
-        self.assertEqual(len(data_dept['complaints']), 1)
-        self.assertEqual(data_dept['complaints'][0]['Complaint ID'], 'CMP-TEST-01')
+        res = self.client.get('/api/complaints/my?from_dept=Online')
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        complaints = data.get('complaints', [])
+        self.assertEqual(len(complaints), 1)
+        self.assertEqual(complaints[0]['Complaint ID'], 'CMP-TEST-01')
+        self.assertEqual(complaints[0]['From Department'], 'Online')
 
-        # Status filter: In Progress (only C-02 matches)
-        res_stat = self.client.get('/api/complaints/my?status=In%20Progress')
-        self.assertEqual(res_stat.status_code, 200)
-        data_stat = res_stat.get_json()
-        self.assertEqual(len(data_stat['complaints']), 1)
-        self.assertEqual(data_stat['complaints'][0]['Complaint ID'], 'CMP-TEST-02')
+    def test_from_department_single_filter_offline(self):
+        self._seed_test_complaints()
+        with self.client.session_transaction() as sess:
+            sess['user'] = self.executive_user
 
-        # Priority filter: Low (only C-03 matches)
-        res_prio = self.client.get('/api/complaints/my?priority=Low')
-        self.assertEqual(res_prio.status_code, 200)
-        data_prio = res_prio.get_json()
-        self.assertEqual(len(data_prio['complaints']), 1)
-        self.assertEqual(data_prio['complaints'][0]['Complaint ID'], 'CMP-TEST-03')
+        res = self.client.get('/api/complaints/my?from_dept=Offline')
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        complaints = data.get('complaints', [])
+        self.assertEqual(len(complaints), 1)
+        self.assertEqual(complaints[0]['Complaint ID'], 'CMP-TEST-02')
+        self.assertEqual(complaints[0]['From Department'], 'Offline')
 
-        # Full-text search: 'Stitching' (only C-01 matches)
-        res_search = self.client.get('/api/complaints/my?search=Stitching')
-        self.assertEqual(res_search.status_code, 200)
-        data_search = res_search.get_json()
-        self.assertEqual(len(data_search['complaints']), 1)
-        self.assertEqual(data_search['complaints'][0]['Complaint ID'], 'CMP-TEST-01')
+    def test_from_department_single_filter_packing(self):
+        self._seed_test_complaints()
+        with self.client.session_transaction() as sess:
+            sess['user'] = self.executive_user
+
+        res = self.client.get('/api/complaints/my?from_dept=Packing')
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        complaints = data.get('complaints', [])
+        self.assertEqual(len(complaints), 1)
+        self.assertEqual(complaints[0]['Complaint ID'], 'CMP-TEST-03')
+        self.assertEqual(complaints[0]['From Department'], 'Packing')
+
+    def test_from_department_single_filter_none(self):
+        self._seed_test_complaints()
+        with self.client.session_transaction() as sess:
+            sess['user'] = self.executive_user
+
+        res = self.client.get('/api/complaints/my?from_dept=None')
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        complaints = data.get('complaints', [])
+        self.assertEqual(len(complaints), 1)
+        self.assertEqual(complaints[0]['Complaint ID'], 'CMP-TEST-06')
+        self.assertEqual(complaints[0]['From Department'], 'None')
+
+    def test_from_department_multiple_selection(self):
+        self._seed_test_complaints()
+        with self.client.session_transaction() as sess:
+            sess['user'] = self.executive_user
+
+        # Multi-select: Online and Offline
+        res = self.client.get('/api/complaints/my?from_dept=Online,Offline')
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        ids = [c['Complaint ID'] for c in data.get('complaints', [])]
+        self.assertEqual(set(ids), {'CMP-TEST-01', 'CMP-TEST-02'})
+
+        # Multi-select: Packing and None
+        res_p_n = self.client.get('/api/complaints/my?from_dept=Packing,None')
+        self.assertEqual(res_p_n.status_code, 200)
+        ids_p_n = [c['Complaint ID'] for c in res_p_n.get_json().get('complaints', [])]
+        self.assertEqual(set(ids_p_n), {'CMP-TEST-03', 'CMP-TEST-06'})
+
+    def test_from_department_combined_filters(self):
+        self._seed_test_complaints()
+        with self.client.session_transaction() as sess:
+            sess['user'] = self.executive_user
+
+        # Combined: From Dept=Online, Dept=Kurti, Priority=High, Status=Under Review, Search=Stitching
+        res = self.client.get('/api/complaints/my?from_dept=Online&department=Kurti&priority=High&status=Under%20Review&search=Stitching')
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(len(data['complaints']), 1)
+        self.assertEqual(data['complaints'][0]['Complaint ID'], 'CMP-TEST-01')
+
+        # Filter mismatch: From Dept=Online but Status=Closed -> should return 0 results
+        res_mismatch = self.client.get('/api/complaints/my?from_dept=Online&status=Closed')
+        self.assertEqual(res_mismatch.status_code, 200)
+        self.assertEqual(len(res_mismatch.get_json()['complaints']), 0)
+
+    def test_from_department_clear_all_resets_filter(self):
+        self._seed_test_complaints()
+        with self.client.session_transaction() as sess:
+            sess['user'] = self.executive_user
+
+        # from_dept=ALL or omitted
+        res_all = self.client.get('/api/complaints/my?from_dept=ALL')
+        self.assertEqual(res_all.status_code, 200)
+        self.assertEqual(len(res_all.get_json()['complaints']), 4)
+
+    def test_from_department_preserves_rbac_cross_department_security(self):
+        self._seed_test_complaints()
+        with self.client.session_transaction() as sess:
+            sess['user'] = self.staff_user  # Pooja Patel, only Kurti department
+
+        # Pooja queries from_dept=Online (which has C-01 Kurti and C-05 Dress Material)
+        # C-05 belongs to Dress Material which Pooja is NOT authorized for and did not create/handle
+        res = self.client.get('/api/complaints?from_dept=Online')
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        ids = [c['Complaint ID'] for c in data.get('complaints', [])]
+        self.assertIn('CMP-TEST-01', ids)  # Kurti matches
+        self.assertNotIn('CMP-TEST-05', ids)  # Dress Material unauthorized
 
     def test_api_my_complaints_pagination(self):
         self._seed_test_complaints()
@@ -363,7 +464,7 @@ class TestMyComplaintsModule(unittest.TestCase):
         data_p1 = res_p1.get_json()
         self.assertEqual(data_p1.get('status'), 'success')
         self.assertEqual(data_p1.get('count'), 2)
-        self.assertEqual(data_p1.get('total_records'), 3)
+        self.assertEqual(data_p1.get('total_records'), 4)
         self.assertIn('pagination', data_p1)
         self.assertEqual(data_p1['pagination']['page'], 1)
         self.assertEqual(data_p1['pagination']['limit'], 2)
@@ -373,7 +474,7 @@ class TestMyComplaintsModule(unittest.TestCase):
         res_p2 = self.client.get('/api/complaints/my?page=2&limit=2')
         self.assertEqual(res_p2.status_code, 200)
         data_p2 = res_p2.get_json()
-        self.assertEqual(data_p2.get('count'), 1)
+        self.assertEqual(data_p2.get('count'), 2)
         self.assertEqual(data_p2['pagination']['page'], 2)
 
 

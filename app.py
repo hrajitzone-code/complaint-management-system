@@ -1561,7 +1561,17 @@ def list_complaints():
                 if (c.get('Priority') or '').strip().lower() != prio_arg.lower():
                     continue
 
-            # 5. Search query
+            # 5. From Department filter (supports comma-separated multi-selection)
+            from_dept_arg = (request.args.get('from_department') or request.args.get('from_dept') or '').strip()
+            if from_dept_arg and from_dept_arg.upper() != 'ALL':
+                allowed_from_depts = [fd.strip().lower() for fd in from_dept_arg.split(',') if fd.strip()]
+                c_from_dept = (c.get('From Department') or c.get('from_department') or '').strip().lower()
+                if not c_from_dept:
+                    c_from_dept = 'none'
+                if c_from_dept not in allowed_from_depts:
+                    continue
+
+            # 6. Search query
             search_arg = (request.args.get('search') or request.args.get('q') or '').strip().lower()
             if search_arg:
                 search_blob = ' '.join([
@@ -1572,6 +1582,8 @@ def list_complaints():
                     str(c.get('Complain Types') or c.get('Subject') or ''),
                     str(c.get('Department Name') or c.get('Department') or ''),
                     str(c.get('From Department') or ''),
+                    str(c.get('Complain Date') or ''),
+                    str(c.get('Timestamp') or ''),
                     str(c.get('Handled By') or c.get('Assigned To Name') or ''),
                     str(c.get('Employee Name') or ''),
                     str(c.get('Vendor Name') or ''),

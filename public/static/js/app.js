@@ -1032,11 +1032,11 @@ function toggleMultiSelect(prefix) {
 }
 
 function closeAllMultiSelects() {
-    ['lodge', 'edit'].forEach(prefix => {
-        const dropdown = document.getElementById(`${prefix}-dept-dropdown`);
-        const container = document.getElementById(`${prefix}-dept-multi-select`);
-        if (dropdown) dropdown.style.display = 'none';
-        if (container) container.classList.remove('open');
+    document.querySelectorAll('.multi-select-dropdown').forEach(dropdown => {
+        dropdown.style.display = 'none';
+    });
+    document.querySelectorAll('.multi-select-container').forEach(container => {
+        container.classList.remove('open');
     });
 }
 
@@ -1382,7 +1382,7 @@ function renderRecentTable(complaints) {
         <tr>
             <td><strong><code>${c['Complaint ID']}</code></strong></td>
             <td>${escapeHtml(c['Complain Types'] || c.Subject || '-')}</td>
-            <td>${formatDepartmentBadges(c['Department Name'] || c.Department)}</td>
+            <td>${formatDepartmentBadges(c['Department Name'] || c.Department)}${c['From Department'] ? `<br><small class="text-muted" style="font-size: 0.76rem;">From: <span class="badge" style="background: #e2e8f0; color: #334155; font-size: 0.72rem; padding: 1px 5px; font-weight: 600;">${escapeHtml(c['From Department'])}</span></small>` : ''}</td>
             <td><span class="badge badge-prio-${(c.Priority || 'medium').toLowerCase()}">${c.Priority || 'Medium'}</span></td>
             <td><span class="badge badge-status-${(c.Status || 'submitted').toLowerCase().replace(/\s+/g, '-')}">${c.Status || 'Submitted'}</span></td>
             <td>${c['Complain Date'] || (c.Timestamp ? c.Timestamp.split(' ')[0] : '-')}</td>
@@ -1502,6 +1502,120 @@ function updateMyStats(complaints) {
     if (closedEl) closedEl.textContent = closed;
 }
 
+const FROM_DEPARTMENT_OPTIONS = ['Online', 'Offline', 'Packing', 'None'];
+
+function toggleMyFromDeptDropdown(event) {
+    if (event) event.stopPropagation();
+    const dropdown = document.getElementById('my-from-dept-dropdown');
+    const container = document.getElementById('my-from-dept-multi-select');
+    if (!dropdown || !container) return;
+
+    const isVisible = dropdown.style.display !== 'none';
+    closeAllMultiSelects();
+    if (!isVisible) {
+        dropdown.style.display = 'flex';
+        container.classList.add('open');
+        const searchInput = document.getElementById('my-from-dept-search');
+        if (searchInput) {
+            searchInput.value = '';
+            filterMyFromDeptOptions();
+            searchInput.focus();
+        }
+    }
+}
+
+function filterMyFromDeptOptions() {
+    const searchVal = (document.getElementById('my-from-dept-search')?.value || '').toLowerCase().trim();
+    const container = document.getElementById('my-from-dept-options');
+    if (!container) return;
+    const options = container.querySelectorAll('.multi-select-option');
+    options.forEach(opt => {
+        const name = (opt.getAttribute('data-name') || '').toLowerCase();
+        opt.style.display = (!searchVal || name.includes(searchVal)) ? 'flex' : 'none';
+    });
+}
+
+function getSelectedFromDepts() {
+    const container = document.getElementById('my-from-dept-options');
+    if (!container) return [];
+    const checked = Array.from(container.querySelectorAll('input[type="checkbox"]:checked'));
+    return checked.map(cb => cb.value.trim().toLowerCase());
+}
+
+function updateMyFromDeptLabel() {
+    const labelEl = document.getElementById('my-from-dept-label');
+    if (!labelEl) return;
+    const selected = getSelectedFromDepts();
+    if (!selected || selected.length === 0 || selected.length === FROM_DEPARTMENT_OPTIONS.length) {
+        labelEl.textContent = 'From Dept: All';
+    } else if (selected.length === 1) {
+        const match = FROM_DEPARTMENT_OPTIONS.find(opt => opt.toLowerCase() === selected[0]) || selected[0];
+        labelEl.innerHTML = `<span class="multi-select-chip">${escapeHtml(match)}</span>`;
+    } else if (selected.length <= 2) {
+        labelEl.innerHTML = selected.map(s => {
+            const match = FROM_DEPARTMENT_OPTIONS.find(opt => opt.toLowerCase() === s) || s;
+            return `<span class="multi-select-chip">${escapeHtml(match)}</span>`;
+        }).join('');
+    } else {
+        const match = FROM_DEPARTMENT_OPTIONS.find(opt => opt.toLowerCase() === selected[0]) || selected[0];
+        labelEl.innerHTML = `<span class="multi-select-chip">${escapeHtml(match)}</span> <span class="multi-select-chip">+${selected.length - 1} more</span>`;
+    }
+}
+
+function onMyFromDeptCheckboxChange() {
+    updateMyFromDeptLabel();
+    filterMyComplaints(1);
+}
+
+function selectAllFromDept() {
+    const container = document.getElementById('my-from-dept-options');
+    if (!container) return;
+    const checkboxes = container.querySelectorAll('.multi-select-option:not([style*="display: none"]) input[type="checkbox"]');
+    checkboxes.forEach(cb => { cb.checked = true; });
+    onMyFromDeptCheckboxChange();
+}
+
+function clearAllFromDept() {
+    const container = document.getElementById('my-from-dept-options');
+    if (!container) return;
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(cb => { cb.checked = false; });
+    onMyFromDeptCheckboxChange();
+}
+
+function populateMyFromDeptFilter(complaints = myComplaintsCache) {
+    const container = document.getElementById('my-from-dept-options');
+    if (!container) return;
+
+    // Calculate counts for each option from loaded complaints
+    const counts = { 'Online': 0, 'Offline': 0, 'Packing': 0, 'None': 0 };
+    if (complaints && complaints.length > 0) {
+        complaints.forEach(c => {
+            const raw = (c['From Department'] || c.from_department || 'None').trim();
+            const normalized = FROM_DEPARTMENT_OPTIONS.find(opt => opt.toLowerCase() === raw.toLowerCase()) || 'None';
+            counts[normalized] = (counts[normalized] || 0) + 1;
+        });
+    }
+
+    const currentSelected = getSelectedFromDepts();
+
+    container.innerHTML = FROM_DEPARTMENT_OPTIONS.map(opt => {
+        const isChecked = currentSelected.includes(opt.toLowerCase());
+        const count = counts[opt] || 0;
+        return `
+            <label class="multi-select-option" data-name="${opt.toLowerCase()}">
+                <input type="checkbox" value="${opt}" ${isChecked ? 'checked' : ''} onchange="onMyFromDeptCheckboxChange()">
+                <span class="option-label" style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                    <span>${escapeHtml(opt)}</span>
+                    <span class="badge" style="background: #f1f5f9; color: #475569; font-size: 0.75rem; font-weight: 600; padding: 2px 6px; border-radius: 10px;">${count}</span>
+                </span>
+            </label>
+        `;
+    }).join('');
+
+    updateMyFromDeptLabel();
+}
+
 function populateMyDepartmentFilter(complaints) {
     const deptSelect = document.getElementById('my-dept-filter');
     if (!deptSelect) return;
@@ -1541,6 +1655,13 @@ function resetMyFilters() {
     if (deptEl) deptEl.value = 'ALL';
     if (statusEl) statusEl.value = 'ALL';
     if (prioEl) prioEl.value = 'ALL';
+
+    const container = document.getElementById('my-from-dept-options');
+    if (container) {
+        const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+        checkboxes.forEach(cb => { cb.checked = false; });
+    }
+    updateMyFromDeptLabel();
 
     filterMyComplaints(1);
 }
@@ -1586,6 +1707,9 @@ async function loadMyComplaints(forceRefresh = false) {
         // Populate department filter for My Complaints
         populateMyDepartmentFilter(complaints);
 
+        // Populate From Department searchable multi-select filter
+        populateMyFromDeptFilter(complaints);
+
         // Update KPI Stats
         updateMyStats(complaints);
 
@@ -1630,6 +1754,14 @@ function filterMyComplaints(page = 1) {
             if (!deptsList.includes(dept)) return false;
         }
 
+        // From Department Filter (Online, Offline, Packing, None)
+        const selectedFromDepts = getSelectedFromDepts();
+        if (selectedFromDepts.length > 0 && selectedFromDepts.length < FROM_DEPARTMENT_OPTIONS.length) {
+            let cFromDept = (c['From Department'] || c.from_department || '').trim().toLowerCase();
+            if (!cFromDept) cFromDept = 'none';
+            if (!selectedFromDepts.includes(cFromDept)) return false;
+        }
+
         // Status Filter
         if (status !== 'all') {
             const cStatus = (c.Status || '').toLowerCase().trim();
@@ -1652,6 +1784,8 @@ function filterMyComplaints(page = 1) {
                 c['Complain Types'] || c.Subject || '',
                 c['Department Name'] || c.Department || '',
                 c['From Department'] || '',
+                c['Complain Date'] || '',
+                c['Timestamp'] || '',
                 c['Handled By'] || c['Assigned To Name'] || '',
                 c['Employee Name'] || '',
                 c['Vendor Name'] || '',
