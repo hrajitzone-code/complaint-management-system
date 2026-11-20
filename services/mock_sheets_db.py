@@ -25,6 +25,24 @@ DEFAULT_DEPARTMENTS = [
 ]
 
 class MockSheetsDB:
+    @classmethod
+    def generate_complaint_id(cls):
+        """Generates a unique complaint ID."""
+        date_part = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')
+        random_suffix = uuid.uuid4().hex[:4].upper()
+        return f"CMP-{date_part}-{random_suffix}"
+
+    @classmethod
+    def get_active_departments(cls):
+        """Returns active departments list."""
+        return [d for d in cls._store['Departments'] if str(d.get('Is Active', 'TRUE')).upper() in ('TRUE', '1', 'YES')]
+
+    @classmethod
+    def create_complaint(cls, complaint_dict, current_user=None):
+        """Creates a complaint record and returns it."""
+        res = cls.bulk_create_complaints([complaint_dict], current_user or {})
+        return res[0] if res else {}
+
     """
     Isolated In-Memory mock storage implementing the exact same database API as SheetsDB.
     Strictly used for offline unit testing, test suites, and mock verification.
@@ -1061,6 +1079,70 @@ class MockSheetsDB:
         return cls._normalize_complaint_record(record)
 
     @classmethod
+    def bulk_create_complaints(cls, complaints_list, current_user):
+        """Mock bulk creation of complaint records."""
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        user_name = current_user.get('name') or current_user.get('Full Name') or 'Staff'
+        user_email = current_user.get('email') or current_user.get('Email') or ''
+
+        created_records = []
+        for c in complaints_list:
+            complaint_id = c.get('Complaint ID') or cls.generate_complaint_id()
+            record = {
+                'Complaint ID': complaint_id,
+                'Timestamp': now_str,
+                'Complainant Email': user_email,
+                'Employee Name': user_name,
+                'Complain Date': (c.get('Complain Date') or c.get('complain_date') or now_str.split(' ')[0]).strip(),
+                'Customer Name': (c.get('Customer Name') or c.get('customer_name') or c.get('Complainant Name') or '').strip(),
+                'Customer Mobile No.': (c.get('Customer Mobile No.') or c.get('customer_mobile') or '').strip(),
+                'Invoice No.': (c.get('Invoice No.') or c.get('invoice_no') or '').strip(),
+                'Complain Types': (c.get('Complain Types') or c.get('complain_types') or c.get('Subject') or '').strip(),
+                'Department Name': (c.get('Department Name') or c.get('department_name') or c.get('Department') or 'General').strip(),
+                'From Department': (c.get('From Department') or c.get('from_department') or 'None').strip(),
+                'Priority': (c.get('Priority') or c.get('priority') or 'Medium').strip(),
+                'Status': (c.get('Status') or c.get('status') or 'Submitted').strip(),
+                'Category': (c.get('Category') or c.get('category') or '').strip(),
+                'Vendor Name': (c.get('Vendor Name') or c.get('vendor_name') or '').strip(),
+                'Salesperson Name': (c.get('Salesperson Name') or c.get('salesperson_name') or '').strip(),
+                'Handled By': (c.get('Handled By') or c.get('handled_by') or 'Unassigned').strip(),
+                'Remarks': (c.get('Remarks') or c.get('remarks') or '').strip(),
+                'Complain Details': (c.get('Complain Details') or c.get('complain_details') or c.get('Description') or '').strip(),
+                'Closing Date': (c.get('Closing Date') or c.get('closing_date') or '').strip(),
+                'Solution Given': (c.get('Solution Given') or c.get('solution_given') or '').strip(),
+                'GR Amount': str(c.get('GR Amount') or c.get('gr_amount') or '').strip(),
+                'GR Expected Date': (c.get('GR Expected Date') or c.get('gr_expected_date') or '').strip(),
+                'Attachment Link': (c.get('Attachment Link') or c.get('attachment_link') or '').strip(),
+                'Comments': (c.get('Comments') or '').strip(),
+                'Total Time Taken': (c.get('Total Time Taken') or '').strip(),
+                'Last Updated At': now_str
+            }
+            if record['From Department'] not in ('Online', 'Offline', 'Packing', 'None'):
+                record['From Department'] = 'None'
+
+            cls._store['Complaints'].append(record)
+            normalized = cls._normalize_complaint_record(record)
+            created_records.append(normalized)
+
+            cls._store['Status History'].append({
+                'History ID': f"HST-{uuid.uuid4().hex[:6].upper()}",
+                'Complaint ID': complaint_id,
+                'Timestamp': now_str,
+                'Old Status': '-',
+                'New Status': record['Status'],
+                'Changed By Name': user_name,
+                'Changed By Email': user_email,
+                'Remarks': "Bulk imported via Excel."
+            })
+
+        return created_records
+
+    @classmethod
+    def get_all_complaints(cls):
+        """Returns all normalized complaint records."""
+        return [cls._normalize_complaint_record(r) for r in cls._store['Complaints']]
+
+    @classmethod
     def get_complaint_by_id(cls, complaint_id):
         if not complaint_id: return None
         for c in cls._store['Complaints']:
@@ -1351,3 +1433,5 @@ class MockSheetsDB:
 
 # Initialize default data on import
 MockSheetsDB.reset()
+
+# Convenience alias

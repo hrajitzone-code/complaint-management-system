@@ -5885,3 +5885,318 @@ function exportAuditTrailCsv() {
 
     window.open(`/api/rbac/audit-logs/export?${params.toString()}`, '_blank');
 }
+
+// =============================================================================
+// EXCEL BULK IMPORT & TEMPLATE DOWNLOAD LOGIC
+// =============================================================================
+
+let _currentExcelFile = null;
+let _currentPreviewData = null;
+let _currentPreviewTab = 'all';
+let _dropZoneConfigured = false;
+
+function openExcelImportModal() {
+    resetExcelImportModal();
+    const modal = document.getElementById('excel-import-modal');
+    if (modal) {
+        modal.style.display = 'flex';
+        document.body.classList.add('modal-open');
+    }
+    setupExcelDropZone();
+}
+
+function closeExcelImportModal() {
+    const modal = document.getElementById('excel-import-modal');
+    if (modal) {
+        modal.style.display = 'none';
+        document.body.classList.remove('modal-open');
+    }
+}
+
+function downloadExcelTemplate() {
+    window.location.href = '/api/complaints/import/template';
+}
+
+function setupExcelDropZone() {
+    if (_dropZoneConfigured) return;
+    const dropZone = document.getElementById('excel-drop-zone');
+    if (!dropZone) return;
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.add('dragover');
+        }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('dragover');
+        }, false);
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt ? dt.files : null;
+        if (files && files.length > 0) {
+            handleSelectedExcelFile(files[0]);
+        }
+    }, false);
+
+    _dropZoneConfigured = true;
+}
+
+function handleExcelFileSelected(event) {
+    const files = event.target.files;
+    if (files && files.length > 0) {
+        handleSelectedExcelFile(files[0]);
+    }
+}
+
+function handleSelectedExcelFile(file) {
+    const name = file.name || '';
+    const lower = name.toLowerCase();
+    if (!lower.endsWith('.xlsx') && !lower.endsWith('.xls')) {
+        showToast('Please select a valid Excel file (.xlsx or .xls)', 'error');
+        return;
+    }
+    _currentExcelFile = file;
+    const nameEl = document.getElementById('excel-file-name');
+    const sizeEl = document.getElementById('excel-file-size');
+    const pill = document.getElementById('excel-selected-file-pill');
+    const validateBtn = document.getElementById('btn-validate-excel');
+
+    if (nameEl) nameEl.textContent = name;
+    if (sizeEl) {
+        const kb = (file.size / 1024).toFixed(1);
+        sizeEl.textContent = `(${kb} KB)`;
+    }
+    if (pill) pill.style.display = 'flex';
+    if (validateBtn) validateBtn.disabled = false;
+}
+
+function clearSelectedExcelFile(e) {
+    if (e) e.stopPropagation();
+    _currentExcelFile = null;
+    const input = document.getElementById('excel-file-input');
+    if (input) input.value = '';
+    const pill = document.getElementById('excel-selected-file-pill');
+    if (pill) pill.style.display = 'none';
+    const validateBtn = document.getElementById('btn-validate-excel');
+    if (validateBtn) validateBtn.disabled = true;
+}
+
+function resetExcelImportModal() {
+    _currentExcelFile = null;
+    _currentPreviewData = null;
+    _currentPreviewTab = 'all';
+
+    const input = document.getElementById('excel-file-input');
+    if (input) input.value = '';
+    const pill = document.getElementById('excel-selected-file-pill');
+    if (pill) pill.style.display = 'none';
+    const validateBtn = document.getElementById('btn-validate-excel');
+    if (validateBtn) validateBtn.disabled = true;
+
+    const stepUpload = document.getElementById('excel-step-upload');
+    const stepPreview = document.getElementById('excel-step-preview');
+    const spinner = document.getElementById('excel-loading-spinner');
+
+    if (stepUpload) stepUpload.style.display = 'block';
+    if (stepPreview) stepPreview.style.display = 'none';
+    if (spinner) spinner.style.display = 'none';
+}
+
+async function uploadAndValidateExcel() {
+    if (!_currentExcelFile) {
+        showToast('Please select an Excel file to validate.', 'error');
+        return;
+    }
+
+    const stepUpload = document.getElementById('excel-step-upload');
+    const stepPreview = document.getElementById('excel-step-preview');
+    const spinner = document.getElementById('excel-loading-spinner');
+
+    if (stepUpload) stepUpload.style.display = 'none';
+    if (spinner) spinner.style.display = 'block';
+
+    const formData = new FormData();
+    formData.append('file', _currentExcelFile);
+
+    try {
+        const res = await fetch('/api/complaints/import/preview', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await res.json();
+
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Failed to parse Excel file.');
+        }
+
+        _currentPreviewData = data.data;
+        displayExcelPreview(_currentPreviewData);
+    } catch (err) {
+        console.error('Validation error:', err);
+        showToast(err.message || 'Validation failed. Please check the Excel file.', 'error');
+        if (spinner) spinner.style.display = 'none';
+        if (stepUpload) stepUpload.style.display = 'block';
+    }
+}
+
+function displayExcelPreview(preview) {
+    const spinner = document.getElementById('excel-loading-spinner');
+    const stepPreview = document.getElementById('excel-step-preview');
+
+    if (spinner) spinner.style.display = 'none';
+    if (stepPreview) stepPreview.style.display = 'block';
+
+    const totalEl = document.getElementById('preview-metric-total');
+    const validEl = document.getElementById('preview-metric-valid');
+    const invalidEl = document.getElementById('preview-metric-invalid');
+
+    if (totalEl) totalEl.textContent = preview.total_rows || 0;
+    if (validEl) validEl.textContent = preview.valid_count || 0;
+    if (invalidEl) invalidEl.textContent = preview.invalid_count || 0;
+
+    const noticeValid = document.getElementById('preview-notice-valid');
+    const noticeErrors = document.getElementById('preview-notice-errors');
+    const errBtn = document.getElementById('btn-download-error-report');
+
+    if (noticeValid) noticeValid.style.display = preview.valid_count > 0 ? 'block' : 'none';
+    if (noticeErrors) noticeErrors.style.display = preview.invalid_count > 0 ? 'block' : 'none';
+    if (errBtn) errBtn.style.display = preview.invalid_count > 0 ? 'inline-flex' : 'none';
+
+    const commitBtn = document.getElementById('btn-commit-import');
+    const commitLabel = document.getElementById('btn-commit-label');
+    if (commitBtn) {
+        commitBtn.disabled = preview.valid_count === 0;
+    }
+    if (commitLabel) {
+        commitLabel.textContent = preview.valid_count > 0 
+            ? `Import ${preview.valid_count} Valid Complaint${preview.valid_count === 1 ? '' : 's'}`
+            : 'No Valid Complaints to Import';
+    }
+
+    _currentPreviewTab = 'all';
+    switchPreviewTab('all');
+}
+
+function switchPreviewTab(tab) {
+    _currentPreviewTab = tab;
+    ['all', 'valid', 'invalid'].forEach(t => {
+        const btn = document.getElementById(`tab-preview-${t}`);
+        if (btn) {
+            if (t === tab) btn.classList.add('active');
+            else btn.classList.remove('active');
+        }
+    });
+
+    renderPreviewTable();
+}
+
+function renderPreviewTable() {
+    const tbody = document.getElementById('preview-table-body');
+    if (!tbody || !_currentPreviewData) return;
+
+    let rowsToRender = [];
+    if (_currentPreviewTab === 'all') {
+        const validWithStatus = (_currentPreviewData.valid_rows || []).map(r => ({ ...r, _isValid: true }));
+        const invalidWithStatus = (_currentPreviewData.invalid_rows || []).map(r => ({ ...r, _isValid: false }));
+        rowsToRender = [...validWithStatus, ...invalidWithStatus].sort((a, b) => (a.row_number || 0) - (b.row_number || 0));
+    } else if (_currentPreviewTab === 'valid') {
+        rowsToRender = (_currentPreviewData.valid_rows || []).map(r => ({ ...r, _isValid: true }));
+    } else if (_currentPreviewTab === 'invalid') {
+        rowsToRender = (_currentPreviewData.invalid_rows || []).map(r => ({ ...r, _isValid: false }));
+    }
+
+    if (rowsToRender.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">No records in this tab.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = rowsToRender.map(r => {
+        const statusBadge = r._isValid
+            ? '<span class="excel-badge-valid">&#10003; Valid</span>'
+            : '<span class="excel-badge-invalid">&#10007; Rejected</span>';
+
+        let notesHtml = '';
+        if (r._isValid) {
+            notesHtml = '<span style="color: #16a34a; font-size: 0.8rem;">Ready for import</span>';
+        } else {
+            const errs = r.errors || [];
+            notesHtml = '<ul style="margin: 0; padding-left: 16px; color: #dc2626; font-size: 0.8rem;">' +
+                errs.map(e => `<li>${escapeHtml(e)}</li>`).join('') +
+                '</ul>';
+        }
+
+        const trBg = r._isValid ? 'transparent' : '#fff5f5';
+
+        return `
+            <tr style="background: ${trBg};">
+                <td style="font-weight: 600; text-align: center;">${r.row_number || '-'}</td>
+                <td>${statusBadge}</td>
+                <td><strong>${escapeHtml(r.customer_name || '-')}</strong></td>
+                <td>${escapeHtml(r.customer_mobile || '-')}</td>
+                <td>${escapeHtml(r.complain_date || '-')}</td>
+                <td>${escapeHtml(r.complain_types || '-')}</td>
+                <td>${escapeHtml(r.department_name || '-')}</td>
+                <td>${escapeHtml(r.from_department || '-')}</td>
+                <td>${notesHtml}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+async function commitExcelImport() {
+    if (!_currentPreviewData || !_currentPreviewData.preview_token) {
+        showToast('No active preview session. Please upload your file again.', 'error');
+        return;
+    }
+    if ((_currentPreviewData.valid_count || 0) <= 0) {
+        showToast('There are no valid complaint rows to import.', 'error');
+        return;
+    }
+
+    const commitBtn = document.getElementById('btn-commit-import');
+    const commitLabel = document.getElementById('btn-commit-label');
+    if (commitBtn) commitBtn.disabled = true;
+    if (commitLabel) commitLabel.textContent = 'Importing into Google Sheets...';
+
+    try {
+        const res = await fetch('/api/complaints/import/commit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ preview_token: _currentPreviewData.preview_token })
+        });
+        const result = await res.json();
+
+        if (!res.ok || result.status !== 'success') {
+            throw new Error(result.message || 'Failed to complete import.');
+        }
+
+        showToast(result.message || `Successfully imported ${result.imported_count} complaints!`, 'success');
+        closeExcelImportModal();
+
+        // Refresh complaint lists and dashboards
+        if (typeof loadManageComplaints === 'function') loadManageComplaints();
+        if (typeof loadMyComplaints === 'function') loadMyComplaints();
+        if (typeof loadDashboardData === 'function') loadDashboardData();
+    } catch (err) {
+        console.error('Import commit error:', err);
+        showToast(err.message || 'Import failed. Please try again.', 'error');
+        if (commitBtn) commitBtn.disabled = false;
+        if (commitLabel) commitLabel.textContent = `Import ${_currentPreviewData.valid_count} Valid Complaints`;
+    }
+}
+
+function downloadExcelErrorReport() {
+    if (!_currentPreviewData || !_currentPreviewData.preview_token) {
+        showToast('No rejected rows available.', 'error');
+        return;
+    }
+    window.location.href = `/api/complaints/import/error-report?preview_token=${encodeURIComponent(_currentPreviewData.preview_token)}`;
+}

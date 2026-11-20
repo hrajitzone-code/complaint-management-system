@@ -52,6 +52,7 @@ from services.report_service import (
     DEFAULT_COL_IDS,
     COLUMN_MAP
 )
+from services.excel_import_service import ExcelImportService
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
@@ -1220,6 +1221,170 @@ def delete_salesperson_endpoint(sp_id):
 # =============================================================================
 # COMPLAINTS APIS
 # =============================================================================
+
+# =============================================================================
+# EXCEL BULK IMPORT & TEMPLATE DOWNLOAD APIS
+# =============================================================================
+
+@app.route('/api/complaints/import/template', methods=['GET'])
+@login_required
+@permission_required('complaints:create')
+def download_excel_template():
+    """
+    Generates and downloads a pre-formatted Excel template for bulk complaint uploads.
+    Includes canonical columns, sample data, and dropdown data validation.
+    """
+    try:
+        user = get_current_user()
+        db = get_db()
+        auth_depts = RBACService.get_user_authorized_departments(user)
+        output_stream = ExcelImportService.generate_template(db, authorized_departments=auth_depts)
+        
+        return send_file(
+            output_stream,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name='complaint_import_template.xlsx'
+        )
+    except Exception as e:
+        logger.error(f"Error generating Excel template: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to generate Excel template: {str(e)}"}), 500
+
+
+@app.route('/api/complaints/import/preview', methods=['POST'])
+@login_required
+@permission_required('complaints:create')
+def preview_excel_import():
+    """
+    Receives an uploaded Excel file, validates every row against mandatory fields,
+    master data, department RBAC scoping, and duplicate detection.
+    Returns preview summary counts and valid/invalid rows.
+    """
+    try:
+        user = get_current_user()
+        db = get_db()
+
+        if 'file' not in request.files:
+            return jsonify({'status': 'error', 'message': 'No file uploaded. Please upload a valid Excel file (.xlsx or .xls).'}), 400
+
+        file_obj = request.files['file']
+        filename = (file_obj.filename or '').strip()
+        if not filename or not (filename.lower().endswith('.xlsx') or filename.lower().endswith('.xls')):
+            return jsonify({'status': 'error', 'message': 'Invalid file format. Please upload an Excel (.xlsx or .xls) file.'}), 400
+
+        result = ExcelImportService.parse_and_validate(file_obj.stream, current_user=user, db_engine=db)
+
+        return jsonify({
+            'status': 'success',
+            'data': result
+        })
+    except ValueError as ve:
+        return jsonify({'status': 'error', 'message': str(ve)}), 400
+    except Exception as e:
+        logger.error(f"Error validating Excel import: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f"Failed to parse and validate Excel file: {str(e)}"}), 500
+
+
+@app.route('/api/complaints/import/commit', methods=['POST'])
+@login_required
+@permission_required('complaints:create')
+def commit_excel_import():
+    """
+    Imports the validated complaint rows into Google Sheets Complaints & Status History.
+    Verifies user preview session, executes batch append, and records audit trail.
+    """
+    try:
+        user = get_current_user()
+        db = get_db()
+
+        data = request.get_json(silent=True) or {}
+        preview_token = data.get('preview_token')
+        if not preview_token:
+            return jsonify({'status': 'error', 'message': 'Preview token is required.'}), 400
+
+        preview_data = ExcelImportService.get_cached_preview(preview_token)
+        if not preview_data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Preview session expired or not found. Please re-upload your Excel file.'
+            }), 400
+
+        # Verify session ownership
+        if str(preview_data.get('user_id', '')) != str(user.get('user_id', '')):
+            return jsonify({'status': 'error', 'message': 'Unauthorized preview session.'}), 403
+
+        valid_rows = preview_data.get('valid_rows', [])
+        if not valid_rows:
+            return jsonify({'status': 'error', 'message': 'No valid records found to import.'}), 400
+
+        # Bulk write to Google Sheets Complaints & Status History
+        created_records = db.bulk_create_complaints(valid_rows, user)
+
+        # Audit logging
+        try:
+            db.log_audit_event(
+                user_id=user.get('user_id'),
+                user_email=user.get('email'),
+                user_role=user.get('role'),
+                action='EXCEL_IMPORT',
+                module='COMPLAINTS',
+                record_id=f"BATCH-{len(created_records)}",
+                department=user.get('department'),
+                details=f"Bulk imported {len(created_records)} complaint(s) via Excel upload ({len(preview_data.get('invalid_rows', []))} rejected).",
+                result='SUCCESS',
+                ip_address=request.remote_addr
+            )
+        except Exception as audit_err:
+            logger.warning(f"Could not record audit log for excel import: {audit_err}")
+
+        return jsonify({
+            'status': 'success',
+            'message': f"Successfully imported {len(created_records)} complaint(s).",
+            'imported_count': len(created_records),
+            'failed_count': len(preview_data.get('invalid_rows', []))
+        })
+    except Exception as e:
+        logger.error(f"Error committing Excel import: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f"Failed to import complaints: {str(e)}"}), 500
+
+
+@app.route('/api/complaints/import/error-report', methods=['POST', 'GET'])
+@login_required
+@permission_required('complaints:create')
+def download_error_report():
+    """
+    Downloads rejected Excel rows with highlighted error descriptions.
+    Supports preview_token via query param or POST body, or direct invalid_rows payload.
+    """
+    try:
+        user = get_current_user()
+        preview_token = request.args.get('preview_token')
+        invalid_rows = []
+
+        if not preview_token and request.is_json:
+            body = request.get_json(silent=True) or {}
+            preview_token = body.get('preview_token')
+            invalid_rows = body.get('invalid_rows', [])
+
+        if preview_token:
+            preview_data = ExcelImportService.get_cached_preview(preview_token)
+            if preview_data:
+                invalid_rows = preview_data.get('invalid_rows', [])
+
+        if not invalid_rows:
+            return jsonify({'status': 'error', 'message': 'No rejected rows found to generate error report.'}), 400
+
+        stream = ExcelImportService.generate_error_report(invalid_rows)
+        return send_file(
+            stream,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name='rejected_complaints_error_report.xlsx'
+        )
+    except Exception as e:
+        logger.error(f"Error generating error report: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to generate error report: {str(e)}"}), 500
+
 
 @app.route('/api/complaints', methods=['POST'])
 @login_required

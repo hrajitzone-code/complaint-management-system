@@ -105,6 +105,18 @@ DEFAULT_DEPARTMENTS = [
 ]
 
 class SheetsDB:
+
+    @classmethod
+    def get_active_departments(cls):
+        """Returns active departments list."""
+        return cls.get_all_departments(include_inactive=False)
+
+    @classmethod
+    def create_complaint(cls, complaint_dict, current_user=None):
+        """Creates a complaint record and returns it."""
+        res = cls.bulk_create_complaints([complaint_dict], current_user or {})
+        return res[0] if res else {}
+
     """
     Pure Google Sheets Database abstraction.
     No SQL database dependencies. All persistent business data is managed in Google Sheets.
@@ -1871,6 +1883,135 @@ class SheetsDB:
             return cls._normalize_complaint_record(record_dict)
 
     @classmethod
+    def bulk_create_complaints(cls, complaints_list, current_user):
+        """
+        Atomically appends multiple complaint records to Google Sheets Complaints worksheet,
+        records initial status history, and invalidates database cache.
+        """
+        if not complaints_list:
+            return []
+
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        user_name = current_user.get('name') or current_user.get('Full Name') or 'Staff'
+        user_email = current_user.get('email') or current_user.get('Email') or ''
+
+        with cls._db_lock:
+            complaints_ws = cls._get_worksheet('Complaints')
+            headers = execute_with_retry(lambda: complaints_ws.row_values(1))
+            if not headers:
+                headers = SHEET_SCHEMAS['Complaints']
+                complaints_ws.append_row(sanitize_row(headers), value_input_option='USER_ENTERED')
+
+            complaint_rows = []
+            history_rows = []
+            created_records = []
+
+            for c in complaints_list:
+                complaint_id = c.get('Complaint ID') or cls.generate_complaint_id()
+                complain_date = (c.get('Complain Date') or c.get('complain_date') or now_str.split(' ')[0]).strip()
+                customer_name = (c.get('Customer Name') or c.get('customer_name') or c.get('Complainant Name') or '').strip()
+                customer_mobile_no = (c.get('Customer Mobile No.') or c.get('customer_mobile') or '').strip()
+                invoice_no = (c.get('Invoice No.') or c.get('invoice_no') or '').strip()
+                complain_types = (c.get('Complain Types') or c.get('complain_types') or c.get('Subject') or '').strip()
+                department_name = (c.get('Department Name') or c.get('department_name') or c.get('Department') or 'General').strip()
+                from_department = (c.get('From Department') or c.get('from_department') or 'None').strip()
+                if from_department not in ('Online', 'Offline', 'Packing', 'None'):
+                    from_department = 'None'
+
+                priority = (c.get('Priority') or c.get('priority') or 'Medium').strip()
+                status = (c.get('Status') or c.get('status') or 'Submitted').strip()
+                category = (c.get('Category') or c.get('category') or '').strip()
+                vendor_name = (c.get('Vendor Name') or c.get('vendor_name') or '').strip()
+                salesperson_name = (c.get('Salesperson Name') or c.get('salesperson_name') or '').strip()
+                handled_by = (c.get('Handled By') or c.get('handled_by') or 'Unassigned').strip()
+                remarks = (c.get('Remarks') or c.get('remarks') or '').strip()
+                complain_details = (c.get('Complain Details') or c.get('complain_details') or c.get('Description') or '').strip()
+                closing_date = (c.get('Closing Date') or c.get('closing_date') or '').strip()
+                solution_given = (c.get('Solution Given') or c.get('solution_given') or '').strip()
+                gr_amount = str(c.get('GR Amount') or c.get('gr_amount') or '').strip()
+                gr_expected_date = (c.get('GR Expected Date') or c.get('gr_expected_date') or '').strip()
+                attachment_link = (c.get('Attachment Link') or c.get('attachment_link') or '').strip()
+
+                total_time_taken = (c.get('Total Time Taken') or '').strip()
+                if not total_time_taken and closing_date and complain_date:
+                    try:
+                        d1 = datetime.datetime.strptime(complain_date, '%Y-%m-%d')
+                        d2 = datetime.datetime.strptime(closing_date, '%Y-%m-%d')
+                        diff_days = (d2 - d1).days
+                        total_time_taken = f"{max(0, diff_days)} day{'s' if diff_days != 1 else ''}"
+                    except Exception:
+                        pass
+
+                field_map = {
+                    'Complaint ID': complaint_id,
+                    'Timestamp': now_str,
+                    'Complainant Email': user_email,
+                    'Employee Name': user_name,
+                    'Complain Date': complain_date,
+                    'Customer Name': customer_name,
+                    'Invoice No.': invoice_no,
+                    'Complain Types': complain_types,
+                    'Priority': priority,
+                    'Remarks': remarks,
+                    'Complain Details': complain_details,
+                    'Customer Mobile No.': customer_mobile_no,
+                    'Department Name': department_name,
+                    'Category': category,
+                    'Vendor Name': vendor_name,
+                    'Salesperson Name': salesperson_name,
+                    'Status': status,
+                    'Closing Date': closing_date,
+                    'Solution Given': solution_given,
+                    'Handled By': handled_by,
+                    'Total Time Taken': total_time_taken,
+                    'Comments': (c.get('Comments') or '').strip(),
+                    'GR Amount': gr_amount,
+                    'GR Expected Date': gr_expected_date,
+                    'Attachment Link': attachment_link,
+                    'Last Updated At': now_str,
+                    'From Department': from_department
+                }
+
+                row = [field_map.get(h, '') for h in headers]
+                complaint_rows.append(sanitize_row(row))
+
+                # Status History row
+                history_id = f"HST-{uuid.uuid4().hex[:6].upper()}"
+                history_rows.append(sanitize_row([
+                    history_id,
+                    complaint_id,
+                    now_str,
+                    '-',
+                    status,
+                    user_name,
+                    user_email,
+                    "Bulk imported via Excel."
+                ]))
+
+                record_dict = dict(zip(SHEET_SCHEMAS['Complaints'], row))
+                created_records.append(cls._normalize_complaint_record(record_dict))
+
+            # Bulk append complaints
+            execute_with_retry(lambda: complaints_ws.append_rows(complaint_rows, value_input_option='USER_ENTERED'))
+            cls._invalidate_cache('Complaints')
+
+            # Bulk append status history
+            try:
+                history_ws = cls._get_worksheet('Status History')
+                execute_with_retry(lambda: history_ws.append_rows(history_rows, value_input_option='USER_ENTERED'))
+                cls._invalidate_cache('Status History')
+            except Exception as h_err:
+                logger.warning(f"Could not batch append status history: {h_err}")
+
+            return created_records
+
+    @classmethod
+    def get_all_complaints(cls):
+        """Returns all normalized complaint records from Complaints worksheet."""
+        records = cls._read_records('Complaints', use_cache=True)
+        return [cls._normalize_complaint_record(r) for r in records]
+
+    @classmethod
     def get_complaint_by_id(cls, complaint_id):
         """Returns single complaint dict with all 21 fields, comments, and history."""
         if not complaint_id:
@@ -2387,3 +2528,5 @@ class SheetsDB:
         except Exception as e:
             logger.warning(f"Error deleting system config key '{key}': {e}")
         return False
+
+# Convenience alias

@@ -540,6 +540,11 @@ class RBACService:
         return permission_id in effective
 
     @classmethod
+    def get_user_authorized_departments(cls, user: Dict[str, Any]) -> List[str]:
+        """Alias for get_user_departments."""
+        return cls.get_user_departments(user)
+
+    @classmethod
     def get_user_departments(cls, user: Dict[str, Any]) -> List[str]:
         """
         Parses user's authorized department list from list, comma/semicolon/pipe separated string.
