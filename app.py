@@ -1760,6 +1760,23 @@ def list_complaints():
             user_dict=user
         )
 
+        # Date filters strictly based on Complain Date
+        from_date_arg = (request.args.get('from_date') or request.args.get('start_date') or '').strip()
+        to_date_arg = (request.args.get('to_date') or request.args.get('end_date') or '').strip()
+        month_year_arg = (request.args.get('month_year') or '').strip()
+        vendor_arg = (request.args.get('vendor') or request.args.get('vendor_name') or '').strip().lower()
+        salesperson_arg = (request.args.get('salesperson') or request.args.get('salesperson_name') or '').strip().lower()
+        type_arg = (request.args.get('complaint_type') or request.args.get('type') or '').strip().lower()
+        handled_arg = (request.args.get('handled_by') or request.args.get('handled') or '').strip().lower()
+        category_arg = (request.args.get('category') or '').strip().lower()
+        invoice_arg = (request.args.get('invoice_no') or request.args.get('invoice') or '').strip().lower()
+        customer_arg = (request.args.get('customer') or request.args.get('customer_name') or '').strip().lower()
+        min_amt_arg = request.args.get('min_amount', type=float)
+        max_amt_arg = request.args.get('max_amount', type=float)
+
+        from_date_dt = ReportService.parse_date(from_date_arg) if from_date_arg else None
+        to_date_dt = ReportService.parse_date(to_date_arg) if to_date_arg else None
+
         filtered = []
         for c in all_complaints:
             # 1. Scope filter: My Records (Assigned to Me OR Created by Me)
@@ -1773,26 +1790,38 @@ def list_complaints():
                 if not RBACService.is_created_by_user(user, c):
                     continue
 
-            # 2. Department filter
+            # 2. CRITICAL Complain Date Filter: strictly uses Complain Date, NEVER Created At / Timestamp
+            c_date_dt = ReportService.parse_date(c.get('Complain Date'))
+            if from_date_dt:
+                if not c_date_dt or c_date_dt < from_date_dt:
+                    continue
+            if to_date_dt:
+                if not c_date_dt or c_date_dt > to_date_dt:
+                    continue
+            if month_year_arg and month_year_arg.upper() != 'ALL':
+                if not c_date_dt or c_date_dt.strftime('%Y-%m') != month_year_arg:
+                    continue
+
+            # 3. Department filter
             dept_arg = (request.args.get('department') or request.args.get('dept') or '').strip()
             if dept_arg and dept_arg.upper() != 'ALL':
                 c_depts = [d.lower() for d in RBACService.parse_complaint_departments(c)]
                 if dept_arg.lower() not in c_depts:
                     continue
 
-            # 3. Status filter
+            # 4. Status filter
             status_arg = (request.args.get('status') or '').strip()
             if status_arg and status_arg.upper() != 'ALL':
                 if (c.get('Status') or '').strip().lower() != status_arg.lower():
                     continue
 
-            # 4. Priority filter
+            # 5. Priority filter
             prio_arg = (request.args.get('priority') or '').strip()
             if prio_arg and prio_arg.upper() != 'ALL':
                 if (c.get('Priority') or '').strip().lower() != prio_arg.lower():
                     continue
 
-            # 5. From Department filter (supports comma-separated multi-selection)
+            # 6. From Department filter (supports comma-separated multi-selection)
             from_dept_arg = (request.args.get('from_department') or request.args.get('from_dept') or '').strip()
             if from_dept_arg and from_dept_arg.upper() != 'ALL':
                 allowed_from_depts = [fd.strip().lower() for fd in from_dept_arg.split(',') if fd.strip()]
@@ -1802,7 +1831,60 @@ def list_complaints():
                 if c_from_dept not in allowed_from_depts:
                     continue
 
-            # 6. Search query
+            # 7. Vendor filter
+            if vendor_arg:
+                c_vendor = (c.get('Vendor Name') or '').lower()
+                if vendor_arg not in c_vendor:
+                    continue
+
+            # 8. Salesperson filter
+            if salesperson_arg:
+                c_sp = (c.get('Salesperson Name') or '').lower()
+                if salesperson_arg not in c_sp:
+                    continue
+
+            # 9. Type filter
+            if type_arg:
+                c_type = (c.get('Complain Types') or c.get('Subject') or '').lower()
+                if type_arg not in c_type:
+                    continue
+
+            # 10. Handled By filter
+            if handled_arg:
+                c_handled = (c.get('Handled By') or c.get('Assigned To Name') or '').lower()
+                if handled_arg not in c_handled:
+                    continue
+
+            # 11. Category filter
+            if category_arg:
+                c_cat = (c.get('Category') or '').lower()
+                if category_arg not in c_cat:
+                    continue
+
+            # 12. Invoice filter
+            if invoice_arg:
+                c_inv = (c.get('Invoice No.') or '').lower()
+                if invoice_arg not in c_inv:
+                    continue
+
+            # 13. Customer / Mobile filter
+            if customer_arg:
+                c_cust = (c.get('Customer Name') or c.get('Complainant Name') or '').lower()
+                c_mob = str(c.get('Customer Mobile No.') or '').lower()
+                if customer_arg not in c_cust and customer_arg not in c_mob:
+                    continue
+
+            # 14. Amount filter
+            if min_amt_arg is not None:
+                c_amt = ReportService.parse_float(c.get('GR Amount'))
+                if c_amt < min_amt_arg:
+                    continue
+            if max_amt_arg is not None:
+                c_amt = ReportService.parse_float(c.get('GR Amount'))
+                if c_amt > max_amt_arg:
+                    continue
+
+            # 15. Search query
             search_arg = (request.args.get('search') or request.args.get('q') or '').strip().lower()
             if search_arg:
                 search_blob = ' '.join([
@@ -1814,7 +1896,6 @@ def list_complaints():
                     str(c.get('Department Name') or c.get('Department') or ''),
                     str(c.get('From Department') or ''),
                     str(c.get('Complain Date') or ''),
-                    str(c.get('Timestamp') or ''),
                     str(c.get('Handled By') or c.get('Assigned To Name') or ''),
                     str(c.get('Employee Name') or ''),
                     str(c.get('Vendor Name') or ''),
@@ -1827,6 +1908,41 @@ def list_complaints():
                     continue
 
             filtered.append(c)
+
+        # Apply Sorting
+        sort_by = (request.args.get('sort_by') or 'date').strip().lower()
+        sort_dir = (request.args.get('sort_dir') or request.args.get('order') or 'desc').strip().lower()
+        reverse = (sort_dir == 'desc')
+
+        def sort_key(item):
+            if sort_by in ('date', 'complain_date'):
+                dt = ReportService.parse_date(item.get('Complain Date'))
+                return dt.isoformat() if dt else ''
+            elif sort_by in ('month', 'month_year'):
+                dt = ReportService.parse_date(item.get('Complain Date'))
+                return dt.strftime('%Y-%m') if dt else ''
+            elif sort_by in ('customer', 'name'):
+                return (item.get('Customer Name') or item.get('Complainant Name') or '').lower()
+            elif sort_by == 'id':
+                return item.get('Complaint ID') or ''
+            elif sort_by == 'invoice':
+                return (item.get('Invoice No.') or '').lower()
+            elif sort_by == 'type':
+                return (item.get('Complain Types') or item.get('Subject') or '').lower()
+            elif sort_by == 'department':
+                return (item.get('Department Name') or item.get('Department') or '').lower()
+            elif sort_by == 'priority':
+                weights = {'urgent': 4, 'high': 3, 'medium': 2, 'low': 1}
+                return weights.get(str(item.get('Priority') or '').lower(), 0)
+            elif sort_by == 'status':
+                return (item.get('Status') or '').lower()
+            elif sort_by == 'handled':
+                return (item.get('Handled By') or item.get('Assigned To Name') or '').lower()
+            elif sort_by == 'amount':
+                return ReportService.parse_float(item.get('GR Amount'))
+            return item.get('Complaint ID') or ''
+
+        filtered.sort(key=sort_key, reverse=reverse)
 
         total_records = len(filtered)
         page = request.args.get('page', type=int)
@@ -2989,11 +3105,11 @@ def _extract_report_filters(req_source):
     filters = {}
     # Direct scalar fields
     for k in [
-        'date_preset', 'start_date', 'end_date', 'employee_name', 'handled_by',
+        'date_preset', 'start_date', 'end_date', 'month_year', 'employee_name', 'handled_by',
         'salesperson_name', 'complain_types', 'category', 'customer_name',
         'customer_mobile_no', 'invoice_no', 'closing_start_date', 'closing_end_date',
         'gr_expected_start_date', 'gr_expected_end_date', 'gr_amount_min', 'gr_amount_max',
-        'overdue_only', 'search'
+        'overdue_only', 'search', 'from_department', 'from_dept'
     ]:
         val = req_source.get(k)
         if val is not None and str(val).strip() != '':

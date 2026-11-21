@@ -13,7 +13,41 @@ let myComplaintsState = {
     page: 1,
     pageSize: 25,
     totalPages: 1,
-    isLoading: false
+    isLoading: false,
+    sortBy: 'date',
+    sortDir: 'desc'
+};
+let manageComplaintsState = {
+    page: 1,
+    pageSize: 25,
+    totalPages: 1,
+    filteredRecords: [],
+    sortBy: 'date',
+    sortDir: 'desc'
+};
+let usersTableState = {
+    sortBy: 'name',
+    sortDir: 'asc'
+};
+let deptsTableState = {
+    sortBy: 'name',
+    sortDir: 'asc'
+};
+let masterCTState = {
+    sortBy: 'name',
+    sortDir: 'asc'
+};
+let masterSPState = {
+    sortBy: 'name',
+    sortDir: 'asc'
+};
+let rolesTableState = {
+    sortBy: 'name',
+    sortDir: 'asc'
+};
+let auditTrailState = {
+    sortBy: 'timestamp',
+    sortDir: 'desc'
 };
 let activeComplaintId = null;
 let driveDiagnostic = null;
@@ -150,12 +184,19 @@ function setupEventListeners() {
 
     const manageSearch = document.getElementById('manage-search-input');
     const manageDept = document.getElementById('manage-dept-filter');
+    const manageFromDept = document.getElementById('manage-from-dept-filter');
     const managePrio = document.getElementById('manage-priority-filter');
     const manageStatus = document.getElementById('manage-status-filter');
+    const manageMonth = document.getElementById('manage-month-year-filter');
+    const myMonth = document.getElementById('my-month-year-filter');
+
     if (manageSearch) manageSearch.addEventListener('input', () => filterManageComplaints(1));
     if (manageDept) manageDept.addEventListener('change', () => filterManageComplaints(1));
+    if (manageFromDept) manageFromDept.addEventListener('change', () => filterManageComplaints(1));
     if (managePrio) managePrio.addEventListener('change', () => filterManageComplaints(1));
     if (manageStatus) manageStatus.addEventListener('change', () => filterManageComplaints(1));
+    if (manageMonth) manageMonth.addEventListener('change', () => filterManageComplaints(1));
+    if (myMonth) myMonth.addEventListener('change', () => filterMyComplaints(1));
 
     // Auto calculate time taken on Lodge form
     const lodgeDate = document.getElementById('comp-date');
@@ -1643,19 +1684,403 @@ function populateMyDepartmentFilter(complaints) {
     deptSelect.innerHTML = html;
 }
 
+// =============================================================================
+// GLOBAL SORTING & DATE PARSING HELPERS
+// =============================================================================
+
+const MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+/**
+ * Robustly parses a complaint date from standard business event formats.
+ * Strictly operates on "Complain Date" / complain_date and NEVER Created At / Timestamp.
+ * Returns { isoDate: 'YYYY-MM-DD', monthYearKey: 'YYYY-MM', monthYearDisplay: 'October 2026', year, month, day } or null.
+ */
+function parseComplaintDate(dateVal) {
+    if (!dateVal) return null;
+    const str = String(dateVal).trim();
+    if (!str || str === '-' || str.toLowerCase() === 'none' || str.toLowerCase() === 'null') return null;
+
+    // 1. Match ISO formats: YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD (with optional time)
+    let match = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (match) {
+        const y = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const d = parseInt(match[3], 10);
+        if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+            const mm = String(m).padStart(2, '0');
+            const dd = String(d).padStart(2, '0');
+            const monthYearKey = `${y}-${mm}`;
+            const monthYearDisplay = `${MONTH_NAMES[m - 1]} ${y}`;
+            return { isoDate: `${y}-${mm}-${dd}`, monthYearKey, monthYearDisplay, year: y, month: m, day: d };
+        }
+    }
+
+    // 2. Match DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY
+    match = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+    if (match) {
+        const d = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const y = parseInt(match[3], 10);
+        if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+            const mm = String(m).padStart(2, '0');
+            const dd = String(d).padStart(2, '0');
+            const monthYearKey = `${y}-${mm}`;
+            const monthYearDisplay = `${MONTH_NAMES[m - 1]} ${y}`;
+            return { isoDate: `${y}-${mm}-${dd}`, monthYearKey, monthYearDisplay, year: y, month: m, day: d };
+        }
+    }
+
+    // 3. Fallback to Date.parse
+    const ts = Date.parse(str);
+    if (!isNaN(ts)) {
+        const dt = new Date(ts);
+        const y = dt.getFullYear();
+        const m = dt.getMonth() + 1;
+        const d = dt.getDate();
+        const mm = String(m).padStart(2, '0');
+        const dd = String(d).padStart(2, '0');
+        const monthYearKey = `${y}-${mm}`;
+        const monthYearDisplay = `${MONTH_NAMES[m - 1]} ${y}`;
+        return { isoDate: `${y}-${mm}-${dd}`, monthYearKey, monthYearDisplay, year: y, month: m, day: d };
+    }
+
+    return null;
+}
+
+/**
+ * Extracts numeric value from currency or formatted string (e.g. "₹1,500.00" -> 1500.00).
+ */
+function parseNumericAmount(val) {
+    if (val === null || val === undefined) return 0;
+    const str = String(val).replace(/[^0-9.-]+/g, '');
+    const num = parseFloat(str);
+    return isNaN(num) ? 0 : num;
+}
+
+/**
+ * Populates dynamic Month-Year dropdowns and searchable datalists from live records.
+ */
+function populateGlobalFilterOptions(records) {
+    if (!records || !records.length) return;
+
+    const monthYearsMap = new Map();
+    const vendorsSet = new Set();
+    const salespersonsSet = new Set();
+    const typesSet = new Set();
+    const handlersSet = new Set();
+
+    records.forEach(c => {
+        // Month-Year from Complain Date
+        const parsed = parseComplaintDate(c['Complain Date'] || c.complain_date);
+        if (parsed && parsed.monthYearKey) {
+            if (!monthYearsMap.has(parsed.monthYearKey)) {
+                monthYearsMap.set(parsed.monthYearKey, {
+                    key: parsed.monthYearKey,
+                    label: parsed.monthYearDisplay,
+                    sortVal: parsed.year * 100 + parsed.month
+                });
+            }
+        }
+
+        // Vendor Name
+        const v = (c['Vendor Name'] || '').trim();
+        if (v && v !== '-' && v.toLowerCase() !== 'none') vendorsSet.add(v);
+
+        // Salesperson Name
+        const sp = (c['Salesperson Name'] || '').trim();
+        if (sp && sp !== '-' && sp.toLowerCase() !== 'none') salespersonsSet.add(sp);
+
+        // Complaint Type
+        const t = (c['Complain Types'] || c.Subject || '').trim();
+        if (t && t !== '-') typesSet.add(t);
+
+        // Handled By
+        const h = (c['Handled By'] || c['Assigned To Name'] || '').trim();
+        if (h && h !== '-' && h.toLowerCase() !== 'unassigned') handlersSet.add(h);
+    });
+
+    // Sort Month-Years reverse chronologically (e.g. Nov 2026, Oct 2026, ...)
+    const sortedMonthYears = Array.from(monthYearsMap.values()).sort((a, b) => b.sortVal - a.sortVal);
+
+    const updateMonthSelect = (selectId) => {
+        const el = document.getElementById(selectId);
+        if (!el) return;
+        const currentVal = el.value;
+        let html = '<option value="ALL">Month-Year: All</option>';
+        sortedMonthYears.forEach(m => {
+            html += `<option value="${escapeHtml(m.key)}">${escapeHtml(m.label)}</option>`;
+        });
+        el.innerHTML = html;
+        if (currentVal && Array.from(el.options).some(o => o.value === currentVal)) {
+            el.value = currentVal;
+        }
+    };
+
+    updateMonthSelect('my-month-year-filter');
+    updateMonthSelect('manage-month-year-filter');
+
+    // Populate datalists
+    const fillDatalist = (id, setObj) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const items = Array.from(setObj).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+        el.innerHTML = items.map(item => `<option value="${escapeHtml(item)}"></option>`).join('');
+    };
+
+    fillDatalist('my-vendor-datalist', vendorsSet);
+    fillDatalist('manage-vendor-datalist', vendorsSet);
+    fillDatalist('my-salesperson-datalist', salespersonsSet);
+    fillDatalist('manage-salesperson-datalist', salespersonsSet);
+    fillDatalist('my-type-datalist', typesSet);
+    fillDatalist('manage-type-datalist', typesSet);
+    fillDatalist('my-handled-datalist', handlersSet);
+    fillDatalist('manage-handled-datalist', handlersSet);
+}
+
+/**
+ * Universal complaint record sorting function.
+ */
+function sortComplaintRecords(records, sortBy, sortDir = 'asc') {
+    if (!records || !records.length) return [];
+    const dir = sortDir === 'desc' ? -1 : 1;
+
+    return [...records].sort((a, b) => {
+        if (sortBy === 'date') {
+            const da = parseComplaintDate(a['Complain Date'] || a.complain_date);
+            const db = parseComplaintDate(b['Complain Date'] || b.complain_date);
+            const valA = da ? da.isoDate : '';
+            const valB = db ? db.isoDate : '';
+            if (!valA && !valB) return 0;
+            if (!valA) return 1;
+            if (!valB) return -1;
+            const cmp = valA.localeCompare(valB);
+            if (cmp !== 0) return cmp * dir;
+            return (b['Complaint ID'] || '').localeCompare(a['Complaint ID'] || '', undefined, { numeric: true });
+        }
+
+        if (sortBy === 'month') {
+            const da = parseComplaintDate(a['Complain Date'] || a.complain_date);
+            const db = parseComplaintDate(b['Complain Date'] || b.complain_date);
+            const valA = da ? da.monthYearKey : '';
+            const valB = db ? db.monthYearKey : '';
+            if (!valA && !valB) return 0;
+            if (!valA) return 1;
+            if (!valB) return -1;
+            const cmp = valA.localeCompare(valB);
+            if (cmp !== 0) return cmp * dir;
+            return (b['Complaint ID'] || '').localeCompare(a['Complaint ID'] || '', undefined, { numeric: true });
+        }
+
+        if (sortBy === 'customer') {
+            const valA = (a['Customer Name'] || a['Complainant Name'] || '').trim().toLowerCase();
+            const valB = (b['Customer Name'] || b['Complainant Name'] || '').trim().toLowerCase();
+            return valA.localeCompare(valB, undefined, { numeric: true }) * dir;
+        }
+
+        if (sortBy === 'id') {
+            const valA = (a['Complaint ID'] || '').trim();
+            const valB = (b['Complaint ID'] || '').trim();
+            return valA.localeCompare(valB, undefined, { numeric: true }) * dir;
+        }
+
+        if (sortBy === 'invoice') {
+            const valA = (a['Invoice No.'] || '').trim().toLowerCase();
+            const valB = (b['Invoice No.'] || '').trim().toLowerCase();
+            return valA.localeCompare(valB, undefined, { numeric: true }) * dir;
+        }
+
+        if (sortBy === 'type') {
+            const valA = (a['Complain Types'] || a.Subject || '').trim().toLowerCase();
+            const valB = (b['Complain Types'] || b.Subject || '').trim().toLowerCase();
+            return valA.localeCompare(valB) * dir;
+        }
+
+        if (sortBy === 'department') {
+            const valA = (a['Department Name'] || a.Department || '').trim().toLowerCase();
+            const valB = (b['Department Name'] || b.Department || '').trim().toLowerCase();
+            return valA.localeCompare(valB) * dir;
+        }
+
+        if (sortBy === 'priority') {
+            const prioWeight = p => {
+                const s = String(p || '').toLowerCase().trim();
+                if (s === 'urgent') return 4;
+                if (s === 'high') return 3;
+                if (s === 'medium') return 2;
+                if (s === 'low') return 1;
+                return 0;
+            };
+            return (prioWeight(a.Priority) - prioWeight(b.Priority)) * dir;
+        }
+
+        if (sortBy === 'status') {
+            const valA = (a.Status || '').trim().toLowerCase();
+            const valB = (b.Status || '').trim().toLowerCase();
+            return valA.localeCompare(valB) * dir;
+        }
+
+        if (sortBy === 'handled') {
+            const valA = (a['Handled By'] || a['Assigned To Name'] || '').trim().toLowerCase();
+            const valB = (b['Handled By'] || b['Assigned To Name'] || '').trim().toLowerCase();
+            return valA.localeCompare(valB) * dir;
+        }
+
+        if (sortBy === 'amount') {
+            const valA = parseNumericAmount(a['GR Amount'] || a.gr_amount);
+            const valB = parseNumericAmount(b['GR Amount'] || b.gr_amount);
+            return (valA - valB) * dir;
+        }
+
+        return 0;
+    });
+}
+
+/**
+ * Updates sort header arrow indicators (▲, ▼, ⇅).
+ */
+function updateSortIcons(prefix, activeCol, sortDir) {
+    const tableId = prefix === 'my' ? 'my-complaints-table' : (prefix === 'manage' ? 'manage-complaints-table' : null);
+    const container = tableId ? document.getElementById(tableId)?.closest('table') : document;
+    if (!container) return;
+
+    const iconEls = container.querySelectorAll(`[id^="${prefix}-sort-icon-"]`);
+    iconEls.forEach(el => {
+        const colKey = el.id.replace(`${prefix}-sort-icon-`, '');
+        const thEl = el.closest('th');
+        if (colKey === activeCol) {
+            el.textContent = sortDir === 'asc' ? '▲' : '▼';
+            if (thEl) {
+                thEl.classList.remove('th-sorted-asc', 'th-sorted-desc');
+                thEl.classList.add(sortDir === 'asc' ? 'th-sorted-asc' : 'th-sorted-desc');
+            }
+        } else {
+            el.textContent = '⇅';
+            if (thEl) {
+                thEl.classList.remove('th-sorted-asc', 'th-sorted-desc');
+            }
+        }
+    });
+}
+
+function handleManageColumnSort(colKey, forceDir) {
+    if (forceDir) {
+        manageComplaintsState.sortDir = forceDir;
+    } else if (manageComplaintsState.sortBy === colKey) {
+        manageComplaintsState.sortDir = manageComplaintsState.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        manageComplaintsState.sortBy = colKey;
+        manageComplaintsState.sortDir = (colKey === 'date' || colKey === 'amount' || colKey === 'priority') ? 'desc' : 'asc';
+    }
+
+    const sortSelect = document.getElementById('manage-sort-by');
+    if (sortSelect) {
+        const targetVal = `${manageComplaintsState.sortBy}-${manageComplaintsState.sortDir}`;
+        if (Array.from(sortSelect.options).some(o => o.value === targetVal)) {
+            sortSelect.value = targetVal;
+        }
+    }
+
+    filterManageComplaints(1);
+}
+
+function handleManageSortDropdownChange(e) {
+    const val = e.target.value;
+    const parts = val.split('-');
+    if (parts.length >= 2) {
+        const col = parts[0];
+        const dir = parts[1];
+        manageComplaintsState.sortBy = col;
+        manageComplaintsState.sortDir = dir;
+        filterManageComplaints(1);
+    }
+}
+
+function handleMyColumnSort(colKey, forceDir) {
+    if (forceDir) {
+        myComplaintsState.sortDir = forceDir;
+    } else if (myComplaintsState.sortBy === colKey) {
+        myComplaintsState.sortDir = myComplaintsState.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        myComplaintsState.sortBy = colKey;
+        myComplaintsState.sortDir = (colKey === 'date' || colKey === 'amount' || colKey === 'priority') ? 'desc' : 'asc';
+    }
+
+    const sortSelect = document.getElementById('my-sort-by');
+    if (sortSelect) {
+        const targetVal = `${myComplaintsState.sortBy}-${myComplaintsState.sortDir}`;
+        if (Array.from(sortSelect.options).some(o => o.value === targetVal)) {
+            sortSelect.value = targetVal;
+        }
+    }
+
+    filterMyComplaints(1);
+}
+
+function handleMySortDropdownChange(e) {
+    const val = e.target.value;
+    const parts = val.split('-');
+    if (parts.length >= 2) {
+        const col = parts[0];
+        const dir = parts[1];
+        myComplaintsState.sortBy = col;
+        myComplaintsState.sortDir = dir;
+        filterMyComplaints(1);
+    }
+}
+
+function toggleManageAdvancedFilters() {
+    const panel = document.getElementById('manage-advanced-filters-panel');
+    const btn = document.getElementById('btn-toggle-manage-advanced');
+    if (!panel) return;
+    const isHidden = panel.style.display === 'none';
+    panel.style.display = isHidden ? 'block' : 'none';
+    if (btn) btn.classList.toggle('filter-pill-active', isHidden);
+}
+
+function toggleMyAdvancedFilters() {
+    const panel = document.getElementById('my-advanced-filters-panel');
+    const btn = document.getElementById('btn-toggle-my-advanced');
+    if (!panel) return;
+    const isHidden = panel.style.display === 'none';
+    panel.style.display = isHidden ? 'block' : 'none';
+    if (btn) btn.classList.toggle('filter-pill-active', isHidden);
+}
+
 function resetMyFilters() {
-    const searchEl = document.getElementById('my-search-input');
-    const scopeEl = document.getElementById('my-scope-filter');
-    const deptEl = document.getElementById('my-dept-filter');
-    const statusEl = document.getElementById('my-status-filter');
-    const prioEl = document.getElementById('my-priority-filter');
+    const inputs = [
+        'my-search-input',
+        'my-from-date',
+        'my-to-date',
+        'my-vendor-filter',
+        'my-salesperson-filter',
+        'my-type-filter',
+        'my-handled-filter',
+        'my-invoice-filter',
+        'my-min-amount',
+        'my-max-amount'
+    ];
+    inputs.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
 
-    if (searchEl) searchEl.value = '';
-    if (scopeEl) scopeEl.value = 'ALL';
-    if (deptEl) deptEl.value = 'ALL';
-    if (statusEl) statusEl.value = 'ALL';
-    if (prioEl) prioEl.value = 'ALL';
+    const selects = [
+        { id: 'my-scope-filter', val: 'ALL' },
+        { id: 'my-dept-filter', val: 'ALL' },
+        { id: 'my-status-filter', val: 'ALL' },
+        { id: 'my-priority-filter', val: 'ALL' },
+        { id: 'my-month-year-filter', val: 'ALL' },
+        { id: 'my-sort-by', val: 'date-desc' }
+    ];
+    selects.forEach(({ id, val }) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val;
+    });
 
+    // Reset From Dept multi-select checkboxes to unchecked (All)
     const container = document.getElementById('my-from-dept-options');
     if (container) {
         const checkboxes = container.querySelectorAll('input[type="checkbox"]');
@@ -1663,7 +2088,49 @@ function resetMyFilters() {
     }
     updateMyFromDeptLabel();
 
+    myComplaintsState.sortBy = 'date';
+    myComplaintsState.sortDir = 'desc';
+
     filterMyComplaints(1);
+}
+
+function resetManageFilters() {
+    const inputs = [
+        'manage-search-input',
+        'manage-from-date',
+        'manage-to-date',
+        'manage-vendor-filter',
+        'manage-salesperson-filter',
+        'manage-type-filter',
+        'manage-handled-filter',
+        'manage-category-filter',
+        'manage-invoice-filter',
+        'manage-customer-filter',
+        'manage-min-amount',
+        'manage-max-amount'
+    ];
+    inputs.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+
+    const selects = [
+        { id: 'manage-dept-filter', val: 'ALL' },
+        { id: 'manage-from-dept-filter', val: 'ALL' },
+        { id: 'manage-priority-filter', val: 'ALL' },
+        { id: 'manage-status-filter', val: 'ALL' },
+        { id: 'manage-month-year-filter', val: 'ALL' },
+        { id: 'manage-sort-by', val: 'date-desc' }
+    ];
+    selects.forEach(({ id, val }) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val;
+    });
+
+    manageComplaintsState.sortBy = 'date';
+    manageComplaintsState.sortDir = 'desc';
+
+    filterManageComplaints(1);
 }
 
 async function loadMyComplaints(forceRefresh = false) {
@@ -1710,6 +2177,9 @@ async function loadMyComplaints(forceRefresh = false) {
         // Populate From Department searchable multi-select filter
         populateMyFromDeptFilter(complaints);
 
+        // Populate dynamic Month-Years and Datalists
+        populateGlobalFilterOptions(complaints);
+
         // Update KPI Stats
         updateMyStats(complaints);
 
@@ -1738,6 +2208,18 @@ function filterMyComplaints(page = 1) {
     const dept = (document.getElementById('my-dept-filter')?.value || 'ALL').toLowerCase().trim();
     const status = (document.getElementById('my-status-filter')?.value || 'ALL').toLowerCase().trim();
     const priority = (document.getElementById('my-priority-filter')?.value || 'ALL').toLowerCase().trim();
+    const monthYear = (document.getElementById('my-month-year-filter')?.value || 'ALL').trim();
+    const fromDate = (document.getElementById('my-from-date')?.value || '').trim();
+    const toDate = (document.getElementById('my-to-date')?.value || '').trim();
+    const vendor = (document.getElementById('my-vendor-filter')?.value || '').toLowerCase().trim();
+    const salesperson = (document.getElementById('my-salesperson-filter')?.value || '').toLowerCase().trim();
+    const compType = (document.getElementById('my-type-filter')?.value || '').toLowerCase().trim();
+    const handledBy = (document.getElementById('my-handled-filter')?.value || '').toLowerCase().trim();
+    const invoice = (document.getElementById('my-invoice-filter')?.value || '').toLowerCase().trim();
+    const minAmountRaw = document.getElementById('my-min-amount')?.value;
+    const maxAmountRaw = document.getElementById('my-max-amount')?.value;
+    const minAmount = (minAmountRaw !== '' && minAmountRaw !== undefined && minAmountRaw !== null) ? parseFloat(minAmountRaw) : null;
+    const maxAmount = (maxAmountRaw !== '' && maxAmountRaw !== undefined && maxAmountRaw !== null) ? parseFloat(maxAmountRaw) : null;
 
     const filtered = myComplaintsCache.filter(c => {
         // Scope Filter
@@ -1745,6 +2227,21 @@ function filterMyComplaints(page = 1) {
             if (!currentUser || !isHandledByUser(c, currentUser)) return false;
         } else if (scope === 'CREATED') {
             if (!currentUser || !isCreatedByUser(c, currentUser)) return false;
+        }
+
+        // CRITICAL Date logic: Strictly based on Complain Date
+        const parsedDate = parseComplaintDate(c['Complain Date'] || c.complain_date);
+        const cIsoDate = parsedDate ? parsedDate.isoDate : '';
+        const cMonthYear = parsedDate ? parsedDate.monthYearKey : '';
+
+        if (fromDate) {
+            if (!cIsoDate || cIsoDate < fromDate) return false;
+        }
+        if (toDate) {
+            if (!cIsoDate || cIsoDate > toDate) return false;
+        }
+        if (monthYear !== 'ALL') {
+            if (!cMonthYear || cMonthYear !== monthYear) return false;
         }
 
         // Department Filter
@@ -1774,6 +2271,46 @@ function filterMyComplaints(page = 1) {
             if (cPrio !== priority) return false;
         }
 
+        // Vendor Filter
+        if (vendor) {
+            const cVendor = (c['Vendor Name'] || '').toLowerCase();
+            if (!cVendor.includes(vendor)) return false;
+        }
+
+        // Salesperson Filter
+        if (salesperson) {
+            const cSP = (c['Salesperson Name'] || '').toLowerCase();
+            if (!cSP.includes(salesperson)) return false;
+        }
+
+        // Type Filter
+        if (compType) {
+            const cType = (c['Complain Types'] || c.Subject || '').toLowerCase();
+            if (!cType.includes(compType)) return false;
+        }
+
+        // Handled By Filter
+        if (handledBy) {
+            const cHandler = (c['Handled By'] || c['Assigned To Name'] || '').toLowerCase();
+            if (!cHandler.includes(handledBy)) return false;
+        }
+
+        // Invoice Filter
+        if (invoice) {
+            const cInv = (c['Invoice No.'] || '').toLowerCase();
+            if (!cInv.includes(invoice)) return false;
+        }
+
+        // Numeric GR Amount Filter
+        if (minAmount !== null && !isNaN(minAmount)) {
+            const cAmt = parseNumericAmount(c['GR Amount'] || c.gr_amount);
+            if (cAmt < minAmount) return false;
+        }
+        if (maxAmount !== null && !isNaN(maxAmount)) {
+            const cAmt = parseNumericAmount(c['GR Amount'] || c.gr_amount);
+            if (cAmt > maxAmount) return false;
+        }
+
         // Full Search Filter
         if (search) {
             const searchBlob = [
@@ -1785,7 +2322,6 @@ function filterMyComplaints(page = 1) {
                 c['Department Name'] || c.Department || '',
                 c['From Department'] || '',
                 c['Complain Date'] || '',
-                c['Timestamp'] || '',
                 c['Handled By'] || c['Assigned To Name'] || '',
                 c['Employee Name'] || '',
                 c['Vendor Name'] || '',
@@ -1802,12 +2338,15 @@ function filterMyComplaints(page = 1) {
         return true;
     });
 
-    myComplaintsState.filteredRecords = filtered;
-    myComplaintsState.totalPages = Math.max(1, Math.ceil(filtered.length / myComplaintsState.pageSize));
+    // Apply Active Sorting
+    const sorted = sortComplaintRecords(filtered, myComplaintsState.sortBy, myComplaintsState.sortDir);
+
+    myComplaintsState.filteredRecords = sorted;
+    myComplaintsState.totalPages = Math.max(1, Math.ceil(sorted.length / myComplaintsState.pageSize));
     myComplaintsState.page = Math.max(1, Math.min(page, myComplaintsState.totalPages));
 
     const totalCount = (myComplaintsCache || []).length;
-    const filteredCount = filtered.length;
+    const filteredCount = sorted.length;
     const startNum = filteredCount > 0 ? (myComplaintsState.page - 1) * myComplaintsState.pageSize + 1 : 0;
     const endNum = Math.min(filteredCount, myComplaintsState.page * myComplaintsState.pageSize);
     const showingStr = `Showing ${startNum}–${endNum} of ${filteredCount}`;
@@ -1827,15 +2366,17 @@ function filterMyComplaints(page = 1) {
     if (btmFiltered) btmFiltered.textContent = filteredCount.toLocaleString();
     if (btmShowing) btmShowing.textContent = showingStr;
 
+    updateSortIcons('my', myComplaintsState.sortBy, myComplaintsState.sortDir);
+
     const start = (myComplaintsState.page - 1) * myComplaintsState.pageSize;
     const end = start + myComplaintsState.pageSize;
-    const pagedRecords = filtered.slice(start, end);
+    const pagedRecords = sorted.slice(start, end);
 
     renderMyComplaintsTable(pagedRecords);
     renderMyPagination({
         page: myComplaintsState.page,
         pageSize: myComplaintsState.pageSize,
-        totalRecords: filtered.length,
+        totalRecords: sorted.length,
         totalPages: myComplaintsState.totalPages
     });
 }
@@ -1958,14 +2499,6 @@ function handleMyPageSizeChange(e) {
     filterMyComplaints(1);
 }
 
-// Manage Complaints Pagination & Live Filtering State
-let manageComplaintsState = {
-    page: 1,
-    pageSize: 25,
-    totalPages: 1,
-    filteredRecords: []
-};
-
 function handleManagePageSizeChange(e) {
     const val = e.target.value;
     manageComplaintsState.pageSize = val === 'all' ? 'all' : (parseInt(val) || 25);
@@ -1984,6 +2517,7 @@ async function loadManageComplaints() {
         if (res.ok && data.complaints) {
             allComplaintsCache = data.complaints;
             await loadStaffUsersList();
+            populateGlobalFilterOptions(allComplaintsCache);
             filterManageComplaints(1);
         }
     } catch (e) {
@@ -1993,41 +2527,161 @@ async function loadManageComplaints() {
 
 function filterManageComplaints(page = 1) {
     const search = (document.getElementById('manage-search-input')?.value || '').toLowerCase().trim();
-    const dept = document.getElementById('manage-dept-filter')?.value || 'ALL';
-    const status = document.getElementById('manage-status-filter')?.value || 'ALL';
-    const priority = document.getElementById('manage-priority-filter')?.value || 'ALL';
+    const dept = (document.getElementById('manage-dept-filter')?.value || 'ALL').toLowerCase().trim();
+    const fromDept = (document.getElementById('manage-from-dept-filter')?.value || 'ALL').toLowerCase().trim();
+    const status = (document.getElementById('manage-status-filter')?.value || 'ALL').toLowerCase().trim();
+    const priority = (document.getElementById('manage-priority-filter')?.value || 'ALL').toLowerCase().trim();
+    const monthYear = (document.getElementById('manage-month-year-filter')?.value || 'ALL').trim();
+    const fromDate = (document.getElementById('manage-from-date')?.value || '').trim();
+    const toDate = (document.getElementById('manage-to-date')?.value || '').trim();
+    const vendor = (document.getElementById('manage-vendor-filter')?.value || '').toLowerCase().trim();
+    const salesperson = (document.getElementById('manage-salesperson-filter')?.value || '').toLowerCase().trim();
+    const compType = (document.getElementById('manage-type-filter')?.value || '').toLowerCase().trim();
+    const handledBy = (document.getElementById('manage-handled-filter')?.value || '').toLowerCase().trim();
+    const category = (document.getElementById('manage-category-filter')?.value || '').toLowerCase().trim();
+    const invoice = (document.getElementById('manage-invoice-filter')?.value || '').toLowerCase().trim();
+    const customer = (document.getElementById('manage-customer-filter')?.value || '').toLowerCase().trim();
+    const minAmountRaw = document.getElementById('manage-min-amount')?.value;
+    const maxAmountRaw = document.getElementById('manage-max-amount')?.value;
+    const minAmount = (minAmountRaw !== '' && minAmountRaw !== undefined && minAmountRaw !== null) ? parseFloat(minAmountRaw) : null;
+    const maxAmount = (maxAmountRaw !== '' && maxAmountRaw !== undefined && maxAmountRaw !== null) ? parseFloat(maxAmountRaw) : null;
 
     const filtered = allComplaintsCache.filter(c => {
-        const matchSearch = !search ||
-            (c['Complaint ID'] || '').toLowerCase().includes(search) ||
-            (c['Customer Name'] || '').toLowerCase().includes(search) ||
-            (c['Complainant Name'] || '').toLowerCase().includes(search) ||
-            (c['Customer Mobile No.'] || '').toLowerCase().includes(search) ||
-            (c['Invoice No.'] || '').toLowerCase().includes(search) ||
-            (c['Complain Types'] || '').toLowerCase().includes(search) ||
-            (c.Subject || '').toLowerCase().includes(search) ||
-            (c['Department Name'] || '').toLowerCase().includes(search) ||
-            (c.Department || '').toLowerCase().includes(search) ||
-            (c['Vendor Name'] || '').toLowerCase().includes(search) ||
-            (c['Salesperson Name'] || '').toLowerCase().includes(search) ||
-            (c['Handled By'] || '').toLowerCase().includes(search) ||
-            (c['Employee Name'] || '').toLowerCase().includes(search);
+        // 1. CRITICAL Complain Date Filtering (Strictly uses Complain Date, NEVER Created At / Timestamp)
+        const parsedDate = parseComplaintDate(c['Complain Date'] || c.complain_date);
+        const cIsoDate = parsedDate ? parsedDate.isoDate : '';
+        const cMonthYear = parsedDate ? parsedDate.monthYearKey : '';
 
-        const depts = (c['Department Name'] || c.Department || '').split(',').map(s => s.trim().toLowerCase());
-        const matchDept = dept === 'ALL' || depts.includes(dept.toLowerCase());
-        const matchStatus = status === 'ALL' || (c.Status || '').toLowerCase() === status.toLowerCase();
-        const matchPriority = priority === 'ALL' || (c.Priority || '').toLowerCase() === priority.toLowerCase();
-        return matchSearch && matchDept && matchStatus && matchPriority;
+        // Custom Date Range
+        if (fromDate) {
+            if (!cIsoDate || cIsoDate < fromDate) return false;
+        }
+        if (toDate) {
+            if (!cIsoDate || cIsoDate > toDate) return false;
+        }
+
+        // Quick Month-Year Filter
+        if (monthYear !== 'ALL') {
+            if (!cMonthYear || cMonthYear !== monthYear) return false;
+        }
+
+        // 2. Department Filter (supports multi-department comma strings)
+        if (dept !== 'all') {
+            const rawDepts = (c['Department Name'] || c.Department || '').toLowerCase();
+            const deptsList = rawDepts.split(',').map(d => d.trim());
+            if (!deptsList.includes(dept)) return false;
+        }
+
+        // 3. From Department Filter (Online, Offline, Packing, None)
+        if (fromDept !== 'all') {
+            let cFromDept = (c['From Department'] || c.from_department || '').trim().toLowerCase();
+            if (!cFromDept) cFromDept = 'none';
+            if (cFromDept !== fromDept) return false;
+        }
+
+        // 4. Status Filter
+        if (status !== 'all') {
+            const cStatus = (c.Status || '').toLowerCase().trim();
+            if (cStatus !== status) return false;
+        }
+
+        // 5. Priority Filter
+        if (priority !== 'all') {
+            const cPrio = (c.Priority || '').toLowerCase().trim();
+            if (cPrio !== priority) return false;
+        }
+
+        // 6. Vendor Name
+        if (vendor) {
+            const cVendor = (c['Vendor Name'] || '').toLowerCase();
+            if (!cVendor.includes(vendor)) return false;
+        }
+
+        // 7. Salesperson Name
+        if (salesperson) {
+            const cSP = (c['Salesperson Name'] || '').toLowerCase();
+            if (!cSP.includes(salesperson)) return false;
+        }
+
+        // 8. Complaint Type / Issue
+        if (compType) {
+            const cType = (c['Complain Types'] || c.Subject || '').toLowerCase();
+            if (!cType.includes(compType)) return false;
+        }
+
+        // 9. Handled By
+        if (handledBy) {
+            const cHandler = (c['Handled By'] || c['Assigned To Name'] || '').toLowerCase();
+            if (!cHandler.includes(handledBy)) return false;
+        }
+
+        // 10. Category
+        if (category) {
+            const cCat = (c.Category || '').toLowerCase();
+            if (!cCat.includes(category)) return false;
+        }
+
+        // 11. Invoice No.
+        if (invoice) {
+            const cInv = (c['Invoice No.'] || '').toLowerCase();
+            if (!cInv.includes(invoice)) return false;
+        }
+
+        // 12. Customer / Mobile
+        if (customer) {
+            const cName = (c['Customer Name'] || c['Complainant Name'] || '').toLowerCase();
+            const cMob = String(c['Customer Mobile No.'] || '').toLowerCase();
+            if (!cName.includes(customer) && !cMob.includes(customer)) return false;
+        }
+
+        // 13. Numeric Amount Filter
+        if (minAmount !== null && !isNaN(minAmount)) {
+            const cAmt = parseNumericAmount(c['GR Amount'] || c.gr_amount);
+            if (cAmt < minAmount) return false;
+        }
+        if (maxAmount !== null && !isNaN(maxAmount)) {
+            const cAmt = parseNumericAmount(c['GR Amount'] || c.gr_amount);
+            if (cAmt > maxAmount) return false;
+        }
+
+        // 14. Full Search Query
+        if (search) {
+            const searchBlob = [
+                c['Complaint ID'] || '',
+                c['Customer Name'] || c['Complainant Name'] || '',
+                c['Customer Mobile No.'] || '',
+                c['Invoice No.'] || '',
+                c['Complain Types'] || c.Subject || '',
+                c['Department Name'] || c.Department || '',
+                c['From Department'] || '',
+                c['Complain Date'] || '',
+                c['Handled By'] || c['Assigned To Name'] || '',
+                c['Employee Name'] || '',
+                c['Vendor Name'] || '',
+                c['Salesperson Name'] || '',
+                c['Remarks'] || '',
+                c['Solution Given'] || '',
+                c.Status || '',
+                c.Priority || ''
+            ].join(' ').toLowerCase();
+
+            if (!searchBlob.includes(search)) return false;
+        }
+
+        return true;
     });
 
-    manageComplaintsState.filteredRecords = filtered;
+    // Apply Active Sorting
+    const sorted = sortComplaintRecords(filtered, manageComplaintsState.sortBy, manageComplaintsState.sortDir);
+
+    manageComplaintsState.filteredRecords = sorted;
     const isAll = manageComplaintsState.pageSize === 'all';
-    const pageSize = isAll ? Math.max(1, filtered.length) : (parseInt(manageComplaintsState.pageSize) || 25);
-    manageComplaintsState.totalPages = isAll ? 1 : Math.max(1, Math.ceil(filtered.length / pageSize));
+    const pageSize = isAll ? Math.max(1, sorted.length) : (parseInt(manageComplaintsState.pageSize) || 25);
+    manageComplaintsState.totalPages = isAll ? 1 : Math.max(1, Math.ceil(sorted.length / pageSize));
     manageComplaintsState.page = Math.max(1, Math.min(page, manageComplaintsState.totalPages));
 
     const totalCount = allComplaintsCache.length;
-    const filteredCount = filtered.length;
+    const filteredCount = sorted.length;
     let start = 0;
     let end = 0;
     let pagedRecords = [];
@@ -2039,11 +2693,11 @@ function filterManageComplaints(page = 1) {
     } else if (isAll) {
         start = 1;
         end = filteredCount;
-        pagedRecords = filtered;
+        pagedRecords = sorted;
     } else {
         start = (manageComplaintsState.page - 1) * pageSize + 1;
         end = Math.min(filteredCount, manageComplaintsState.page * pageSize);
-        pagedRecords = filtered.slice((manageComplaintsState.page - 1) * pageSize, manageComplaintsState.page * pageSize);
+        pagedRecords = sorted.slice((manageComplaintsState.page - 1) * pageSize, manageComplaintsState.page * pageSize);
     }
 
     const showingStr = `Showing ${start}–${end} of ${filteredCount}`;
@@ -2062,6 +2716,8 @@ function filterManageComplaints(page = 1) {
     if (btmTotal) btmTotal.textContent = totalCount.toLocaleString();
     if (btmFiltered) btmFiltered.textContent = filteredCount.toLocaleString();
     if (btmShowing) btmShowing.textContent = showingStr;
+
+    updateSortIcons('manage', manageComplaintsState.sortBy, manageComplaintsState.sortDir);
 
     renderManageTable(pagedRecords);
     renderManagePagination({
@@ -2701,12 +3357,51 @@ async function loadSettingsData() {
 
 let currentUsersList = [];
 
+function populateUsersRoleFilter(users) {
+    const sel = document.getElementById('users-role-filter');
+    if (!sel || !users) return;
+    const currentVal = sel.value;
+    const rolesSet = new Set(users.map(u => (u.Role || '').trim()).filter(Boolean));
+    const sorted = Array.from(rolesSet).sort();
+    let html = '<option value="ALL">All Roles</option>';
+    sorted.forEach(r => {
+        html += `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`;
+    });
+    sel.innerHTML = html;
+    if (currentVal && Array.from(sel.options).some(o => o.value === currentVal)) {
+        sel.value = currentVal;
+    }
+}
+
+function handleUserColumnSort(colKey) {
+    if (usersTableState.sortBy === colKey) {
+        usersTableState.sortDir = usersTableState.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        usersTableState.sortBy = colKey;
+        usersTableState.sortDir = 'asc';
+    }
+    renderUsersTable();
+}
+
+function resetUsersFilters() {
+    const searchEl = document.getElementById('users-search-input');
+    const statusEl = document.getElementById('users-status-filter');
+    const roleEl = document.getElementById('users-role-filter');
+    if (searchEl) searchEl.value = '';
+    if (statusEl) statusEl.value = 'ALL';
+    if (roleEl) roleEl.value = 'ALL';
+    usersTableState.sortBy = 'name';
+    usersTableState.sortDir = 'asc';
+    renderUsersTable();
+}
+
 async function loadAdminUsers() {
     try {
         const res = await fetch('/api/users');
         const data = await res.json();
         if (res.ok && data.users) {
             currentUsersList = data.users;
+            populateUsersRoleFilter(currentUsersList);
             renderUsersTable();
         } else {
             const tbody = document.getElementById('settings-users-table');
@@ -2727,20 +3422,78 @@ function renderUsersTable() {
         return;
     }
 
+    const q = (document.getElementById('users-search-input')?.value || '').toLowerCase().trim();
     const filterVal = document.getElementById('users-status-filter')?.value || 'ALL';
+    const roleVal = document.getElementById('users-role-filter')?.value || 'ALL';
     const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
     const isAdmin = currentUser && (currentUser.role === 'Admin' || isSuperAdmin);
 
-    const filteredUsers = currentUsersList.filter(u => {
+    let filteredUsers = currentUsersList.filter(u => {
         const rawStatus = String(u['Is Active'] || 'TRUE').toUpperCase();
-        if (filterVal === 'ACTIVE') return rawStatus === 'TRUE';
-        if (filterVal === 'INACTIVE') return rawStatus === 'FALSE';
-        if (filterVal === 'ARCHIVED') return rawStatus === 'ARCHIVED';
+        if (filterVal === 'ACTIVE' && rawStatus !== 'TRUE') return false;
+        if (filterVal === 'INACTIVE' && rawStatus !== 'FALSE') return false;
+        if (filterVal === 'ARCHIVED' && rawStatus !== 'ARCHIVED') return false;
+
+        if (roleVal !== 'ALL') {
+            if ((u.Role || '').trim().toLowerCase() !== roleVal.toLowerCase()) return false;
+        }
+
+        if (q) {
+            const blob = [
+                u['User ID'] || '',
+                u['Full Name'] || '',
+                u.Email || '',
+                u.Role || '',
+                u.Department || ''
+            ].join(' ').toLowerCase();
+            if (!blob.includes(q)) return false;
+        }
+
         return true;
     });
 
+    // Update live count badge
+    const liveCountEl = document.getElementById('users-live-count');
+    if (liveCountEl) {
+        liveCountEl.textContent = `Total: ${currentUsersList.length} | Filtered: ${filteredUsers.length}`;
+    }
+
+    // Sort users
+    const dir = usersTableState.sortDir === 'desc' ? -1 : 1;
+    filteredUsers.sort((a, b) => {
+        const col = usersTableState.sortBy;
+        if (col === 'id') {
+            return (a['User ID'] || '').localeCompare(b['User ID'] || '', undefined, { numeric: true }) * dir;
+        }
+        if (col === 'email') {
+            return (a.Email || '').toLowerCase().localeCompare((b.Email || '').toLowerCase()) * dir;
+        }
+        if (col === 'role') {
+            return (a.Role || '').toLowerCase().localeCompare((b.Role || '').toLowerCase()) * dir;
+        }
+        if (col === 'department') {
+            return (a.Department || '').toLowerCase().localeCompare((b.Department || '').toLowerCase()) * dir;
+        }
+        if (col === 'status') {
+            const sA = String(a['Is Active'] || 'TRUE');
+            const sB = String(b['Is Active'] || 'TRUE');
+            return sA.localeCompare(sB) * dir;
+        }
+        // default name
+        return (a['Full Name'] || '').toLowerCase().localeCompare((b['Full Name'] || '').toLowerCase()) * dir;
+    });
+
+    // Update sort header icons
+    const cols = ['id', 'name', 'email', 'role', 'department', 'status'];
+    cols.forEach(c => {
+        const iconEl = document.getElementById(`user-sort-icon-${c}`);
+        if (iconEl) {
+            iconEl.textContent = usersTableState.sortBy === c ? (usersTableState.sortDir === 'asc' ? '▲' : '▼') : '⇅';
+        }
+    });
+
     if (filteredUsers.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-muted">No ${escapeHtml(filterVal.toLowerCase())} users found.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-muted">No matching users found.</td></tr>`;
         return;
     }
 
@@ -3208,6 +3961,27 @@ let activeEditDept = null;
 let activeDeleteDeptId = null;
 let activeDeleteDeptName = '';
 let activeDeleteLinkedCount = 0;
+let allAdminDeptsCache = [];
+
+function handleDeptColumnSort(colKey) {
+    if (deptsTableState.sortBy === colKey) {
+        deptsTableState.sortDir = deptsTableState.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        deptsTableState.sortBy = colKey;
+        deptsTableState.sortDir = 'asc';
+    }
+    renderAdminDeptsTable();
+}
+
+function resetDeptsFilters() {
+    const searchEl = document.getElementById('depts-search-input');
+    const statusEl = document.getElementById('depts-status-filter');
+    if (searchEl) searchEl.value = '';
+    if (statusEl) statusEl.value = 'ALL';
+    deptsTableState.sortBy = 'name';
+    deptsTableState.sortDir = 'asc';
+    renderAdminDeptsTable();
+}
 
 async function loadAdminDepts() {
     const tbody = document.getElementById('settings-depts-table');
@@ -3215,37 +3989,104 @@ async function loadAdminDepts() {
     try {
         const res = await fetch('/api/departments?all=true');
         const data = await res.json();
-        const depts = (res.ok && data.departments) ? data.departments : currentDepartments;
-
-        if (!depts.length) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">No departments configured yet.</td></tr>';
-            return;
-        }
-
-        tbody.innerHTML = depts.map(d => {
-            const isActive = String(d['Is Active']).toUpperCase() !== 'FALSE';
-            const deptId = d['Department ID'] || '';
-            const deptName = d.Name || '';
-            return `
-                <tr>
-                    <td><code>${escapeHtml(deptId)}</code></td>
-                    <td><strong>${escapeHtml(deptName)}</strong></td>
-                    <td>${escapeHtml(d.Description || '-')}</td>
-                    <td>${escapeHtml(d['Lead Email'] || '-')}</td>
-                    <td><span class="${isActive ? 'badge-active' : 'badge-inactive'}">${isActive ? 'Active' : 'Inactive'}</span></td>
-                    <td>
-                        <div class="table-row-actions">
-                            <button class="btn btn-warning btn-sm" onclick="openEditDeptModal('${escapeHtml(deptId)}')">Edit</button>
-                            <button class="btn btn-outline-danger btn-sm" onclick="openDeleteDeptModal('${escapeHtml(deptId)}')">Delete</button>
-                        </div>
-                    </td>
-                </tr>
-            `;
-        }).join('');
+        allAdminDeptsCache = (res.ok && data.departments) ? data.departments : currentDepartments;
+        renderAdminDeptsTable();
     } catch (e) {
         console.error("Failed to load admin departments:", e);
         tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-danger">Error loading departments.</td></tr>';
     }
+}
+
+function renderAdminDeptsTable() {
+    const tbody = document.getElementById('settings-depts-table');
+    if (!tbody) return;
+
+    if (!allAdminDeptsCache || !allAdminDeptsCache.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">No departments configured yet.</td></tr>';
+        return;
+    }
+
+    const q = (document.getElementById('depts-search-input')?.value || '').trim().toLowerCase();
+    const statusFilter = document.getElementById('depts-status-filter')?.value || 'ALL';
+
+    let filtered = allAdminDeptsCache.filter(d => {
+        const isActive = String(d['Is Active']).toUpperCase() !== 'FALSE';
+        if (statusFilter === 'ACTIVE' && !isActive) return false;
+        if (statusFilter === 'INACTIVE' && isActive) return false;
+
+        if (q) {
+            const blob = [
+                d['Department ID'] || '',
+                d.Name || '',
+                d.Description || '',
+                d['Lead Email'] || ''
+            ].join(' ').toLowerCase();
+            if (!blob.includes(q)) return false;
+        }
+        return true;
+    });
+
+    // Update live count badge
+    const liveCountEl = document.getElementById('depts-live-count');
+    if (liveCountEl) {
+        liveCountEl.textContent = `Total: ${allAdminDeptsCache.length} | Filtered: ${filtered.length}`;
+    }
+
+    // Sort
+    const dir = deptsTableState.sortDir === 'desc' ? -1 : 1;
+    filtered.sort((a, b) => {
+        const col = deptsTableState.sortBy;
+        if (col === 'id') {
+            return (a['Department ID'] || '').localeCompare(b['Department ID'] || '', undefined, { numeric: true }) * dir;
+        }
+        if (col === 'description') {
+            return (a.Description || '').toLowerCase().localeCompare((b.Description || '').toLowerCase()) * dir;
+        }
+        if (col === 'lead') {
+            return (a['Lead Email'] || '').toLowerCase().localeCompare((b['Lead Email'] || '').toLowerCase()) * dir;
+        }
+        if (col === 'status') {
+            const sA = String(a['Is Active']).toUpperCase() !== 'FALSE' ? 'Active' : 'Inactive';
+            const sB = String(b['Is Active']).toUpperCase() !== 'FALSE' ? 'Active' : 'Inactive';
+            return sA.localeCompare(sB) * dir;
+        }
+        return (a.Name || '').toLowerCase().localeCompare((b.Name || '').toLowerCase()) * dir;
+    });
+
+    // Update sort header icons
+    const cols = ['id', 'name', 'description', 'lead', 'status'];
+    cols.forEach(c => {
+        const iconEl = document.getElementById(`dept-sort-icon-${c}`);
+        if (iconEl) {
+            iconEl.textContent = deptsTableState.sortBy === c ? (deptsTableState.sortDir === 'asc' ? '▲' : '▼') : '⇅';
+        }
+    });
+
+    if (!filtered.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">No matching departments found.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(d => {
+        const isActive = String(d['Is Active']).toUpperCase() !== 'FALSE';
+        const deptId = d['Department ID'] || '';
+        const deptName = d.Name || '';
+        return `
+            <tr>
+                <td><code>${escapeHtml(deptId)}</code></td>
+                <td><strong>${escapeHtml(deptName)}</strong></td>
+                <td>${escapeHtml(d.Description || '-')}</td>
+                <td>${escapeHtml(d['Lead Email'] || '-')}</td>
+                <td><span class="${isActive ? 'badge-active' : 'badge-inactive'}">${isActive ? 'Active' : 'Inactive'}</span></td>
+                <td>
+                    <div class="table-row-actions">
+                        <button class="btn btn-warning btn-sm" onclick="openEditDeptModal('${escapeHtml(deptId)}')">Edit</button>
+                        <button class="btn btn-outline-danger btn-sm" onclick="openDeleteDeptModal('${escapeHtml(deptId)}')">Delete</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
 }
 
 function openCreateDeptModal() {
@@ -4969,6 +5810,16 @@ async function loadMasterComplaintTypes() {
     }
 }
 
+function handleMasterCTColumnSort(colKey) {
+    if (masterCTState.sortBy === colKey) {
+        masterCTState.sortDir = masterCTState.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        masterCTState.sortBy = colKey;
+        masterCTState.sortDir = 'asc';
+    }
+    filterMasterComplaintTypes();
+}
+
 function filterMasterComplaintTypes() {
     const tbody = document.getElementById('master-ct-table-body');
     if (!tbody) return;
@@ -4985,6 +5836,33 @@ function filterMasterComplaintTypes() {
                               (statusFilter === 'ACTIVE' && isActive) || 
                               (statusFilter === 'INACTIVE' && !isActive);
         return matchesQ && matchesStatus;
+    });
+
+    // Sort complaint types
+    const dir = masterCTState.sortDir === 'desc' ? -1 : 1;
+    filtered.sort((a, b) => {
+        const col = masterCTState.sortBy;
+        if (col === 'id') {
+            return (a['Type ID'] || '').localeCompare(b['Type ID'] || '', undefined, { numeric: true }) * dir;
+        }
+        if (col === 'description') {
+            return (a.Description || '').toLowerCase().localeCompare((b.Description || '').toLowerCase()) * dir;
+        }
+        if (col === 'status') {
+            const sA = String(a['Is Active']).toUpperCase() === 'TRUE' ? 'Active' : 'Inactive';
+            const sB = String(b['Is Active']).toUpperCase() === 'TRUE' ? 'Active' : 'Inactive';
+            return sA.localeCompare(sB) * dir;
+        }
+        return (a.Name || '').toLowerCase().localeCompare((b.Name || '').toLowerCase()) * dir;
+    });
+
+    // Update sort icons
+    const cols = ['id', 'name', 'description', 'status'];
+    cols.forEach(c => {
+        const iconEl = document.getElementById(`ct-sort-icon-${c}`);
+        if (iconEl) {
+            iconEl.textContent = masterCTState.sortBy === c ? (masterCTState.sortDir === 'asc' ? '▲' : '▼') : '⇅';
+        }
     });
 
     if (!filtered.length) {
@@ -5143,6 +6021,16 @@ async function loadMasterSalespersons() {
     }
 }
 
+function handleMasterSPColumnSort(colKey) {
+    if (masterSPState.sortBy === colKey) {
+        masterSPState.sortDir = masterSPState.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        masterSPState.sortBy = colKey;
+        masterSPState.sortDir = 'asc';
+    }
+    filterMasterSalespersons();
+}
+
 function filterMasterSalespersons() {
     const tbody = document.getElementById('master-sp-table-body');
     if (!tbody) return;
@@ -5160,6 +6048,35 @@ function filterMasterSalespersons() {
                               (statusFilter === 'ACTIVE' && isActive) || 
                               (statusFilter === 'INACTIVE' && !isActive);
         return matchesQ && matchesStatus;
+    });
+
+    // Sort salespersons
+    const dir = masterSPState.sortDir === 'desc' ? -1 : 1;
+    filtered.sort((a, b) => {
+        const col = masterSPState.sortBy;
+        if (col === 'id') {
+            return (a['Salesperson ID'] || '').localeCompare(b['Salesperson ID'] || '', undefined, { numeric: true }) * dir;
+        }
+        if (col === 'contact') {
+            const cA = (a.Phone || a.Email || '').toLowerCase();
+            const cB = (b.Phone || b.Email || '').toLowerCase();
+            return cA.localeCompare(cB) * dir;
+        }
+        if (col === 'status') {
+            const sA = String(a['Is Active']).toUpperCase() === 'TRUE' ? 'Active' : 'Inactive';
+            const sB = String(b['Is Active']).toUpperCase() === 'TRUE' ? 'Active' : 'Inactive';
+            return sA.localeCompare(sB) * dir;
+        }
+        return (a.Name || '').toLowerCase().localeCompare((b.Name || '').toLowerCase()) * dir;
+    });
+
+    // Update sort icons
+    const cols = ['id', 'name', 'contact', 'status'];
+    cols.forEach(c => {
+        const iconEl = document.getElementById(`sp-sort-icon-${c}`);
+        if (iconEl) {
+            iconEl.textContent = masterSPState.sortBy === c ? (masterSPState.sortDir === 'asc' ? '▲' : '▼') : '⇅';
+        }
     });
 
     if (!filtered.length) {
@@ -5494,6 +6411,28 @@ async function loadRolesData() {
     }
 }
 
+function handleRoleColumnSort(colKey) {
+    if (rolesTableState.sortBy === colKey) {
+        rolesTableState.sortDir = rolesTableState.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        rolesTableState.sortBy = colKey;
+        rolesTableState.sortDir = 'asc';
+    }
+    renderRolesTable();
+}
+
+function resetRolesFilters() {
+    const searchEl = document.getElementById('roles-search-input');
+    const scopeEl = document.getElementById('roles-scope-filter');
+    const typeEl = document.getElementById('roles-type-filter');
+    if (searchEl) searchEl.value = '';
+    if (scopeEl) scopeEl.value = 'ALL';
+    if (typeEl) typeEl.value = 'ALL';
+    rolesTableState.sortBy = 'name';
+    rolesTableState.sortDir = 'asc';
+    renderRolesTable();
+}
+
 function renderRolesTable() {
     const tbody = document.getElementById('roles-table-body');
     if (!tbody) return;
@@ -5503,9 +6442,86 @@ function renderRolesTable() {
         return;
     }
 
+    const q = (document.getElementById('roles-search-input')?.value || '').trim().toLowerCase();
+    const scopeFilter = document.getElementById('roles-scope-filter')?.value || 'ALL';
+    const typeFilter = document.getElementById('roles-type-filter')?.value || 'ALL';
     const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
 
-    tbody.innerHTML = allRolesCache.map(r => {
+    let filteredRoles = allRolesCache.filter(r => {
+        const roleName = r.role_name || r.Name || r.name || '';
+        const description = r.description || r.Description || '';
+        const scope = (r.data_scope || r['Data Scope'] || 'DEPARTMENT').toUpperCase();
+        const isSystem = (r.is_system !== undefined) ? !!r.is_system : 
+                         (r.is_system_role !== undefined) ? !!r.is_system_role : 
+                         (String(r['Is System Role']).toUpperCase() === 'TRUE');
+
+        if (scopeFilter !== 'ALL') {
+            const targetScope = scopeFilter === 'ALL_SCOPE' ? 'ALL' : scopeFilter;
+            if (scope !== targetScope) return false;
+        }
+
+        if (typeFilter === 'SYSTEM' && !isSystem) return false;
+        if (typeFilter === 'CUSTOM' && isSystem) return false;
+
+        if (q) {
+            const blob = `${roleName} ${description} ${scope}`.toLowerCase();
+            if (!blob.includes(q)) return false;
+        }
+
+        return true;
+    });
+
+    // Update live count badge if present
+    const liveCountEl = document.getElementById('roles-live-count');
+    if (liveCountEl) {
+        liveCountEl.textContent = `Total: ${allRolesCache.length} | Filtered: ${filteredRoles.length}`;
+    }
+
+    // Sort roles
+    const dir = rolesTableState.sortDir === 'desc' ? -1 : 1;
+    filteredRoles.sort((a, b) => {
+        const col = rolesTableState.sortBy;
+        if (col === 'type') {
+            const tA = (a.is_system || String(a['Is System Role']).toUpperCase() === 'TRUE') ? 'System' : 'Custom';
+            const tB = (b.is_system || String(b['Is System Role']).toUpperCase() === 'TRUE') ? 'System' : 'Custom';
+            return tA.localeCompare(tB) * dir;
+        }
+        if (col === 'scope') {
+            const sA = (a.data_scope || a['Data Scope'] || 'DEPARTMENT').toUpperCase();
+            const sB = (b.data_scope || b['Data Scope'] || 'DEPARTMENT').toUpperCase();
+            return sA.localeCompare(sB) * dir;
+        }
+        if (col === 'users') {
+            const uA = a.assigned_users_count || a.assigned_user_count || 0;
+            const uB = b.assigned_users_count || b.assigned_user_count || 0;
+            return (uA - uB) * dir;
+        }
+        if (col === 'permissions') {
+            const pA = Array.isArray(a.permissions) ? a.permissions.length : (String(a.Permissions || '').split(',').length);
+            const pB = Array.isArray(b.permissions) ? b.permissions.length : (String(b.Permissions || '').split(',').length);
+            return (pA - pB) * dir;
+        }
+        // default: name
+        const nA = a.role_name || a.Name || a.name || '';
+        const nB = b.role_name || b.Name || b.name || '';
+        return nA.toLowerCase().localeCompare(nB.toLowerCase()) * dir;
+    });
+
+    // Update sort header icons
+    const cols = ['name', 'type', 'scope', 'users', 'permissions'];
+    cols.forEach(c => {
+        const iconEl = document.getElementById(`role-sort-icon-${c}`);
+        if (iconEl) {
+            iconEl.textContent = rolesTableState.sortBy === c ? (rolesTableState.sortDir === 'asc' ? '▲' : '▼') : '⇅';
+        }
+    });
+
+    if (!filteredRoles.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding: 24px;">No matching roles found.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = filteredRoles.map(r => {
         const roleId = r.role_id || r['Role ID'] || r.id || '';
         const roleName = r.role_name || r.Name || r.name || '';
         const description = r.description || r.Description || '';
@@ -5957,6 +6973,20 @@ function debounceAuditSearch() {
     }, 350);
 }
 
+function handleAuditColumnSort(colKey) {
+    if (auditTrailState.sortBy === colKey) {
+        auditTrailState.sortDir = auditTrailState.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        auditTrailState.sortBy = colKey;
+        auditTrailState.sortDir = colKey === 'timestamp' ? 'desc' : 'asc';
+    }
+    renderAuditTrailTable();
+}
+
+function filterAuditTrailTable() {
+    renderAuditTrailTable();
+}
+
 function renderAuditTrailTable() {
     const tbody = document.getElementById('audit-table-body');
     if (!tbody) return;
@@ -5966,7 +6996,62 @@ function renderAuditTrailTable() {
         return;
     }
 
-    tbody.innerHTML = auditTrailCache.map(log => {
+    const resultFilter = (document.getElementById('audit-filter-result')?.value || 'ALL').toUpperCase();
+
+    let filtered = auditTrailCache.filter(log => {
+        const result = String(log.Result || 'SUCCESS').toUpperCase();
+        if (resultFilter === 'SUCCESS' && result !== 'SUCCESS') return false;
+        if (resultFilter === 'FAILED' && result !== 'FAILED') return false;
+        return true;
+    });
+
+    // Sort audit logs
+    const dir = auditTrailState.sortDir === 'desc' ? -1 : 1;
+    filtered.sort((a, b) => {
+        const col = auditTrailState.sortBy;
+        if (col === 'timestamp') {
+            const tA = a.Timestamp || '';
+            const tB = b.Timestamp || '';
+            return tA.localeCompare(tB) * dir;
+        }
+        if (col === 'user') {
+            const uA = (a.User_Email || a.User_ID || '').toLowerCase();
+            const uB = (b.User_Email || b.User_ID || '').toLowerCase();
+            return uA.localeCompare(uB) * dir;
+        }
+        if (col === 'action') {
+            return (a.Action || '').toLowerCase().localeCompare((b.Action || '').toLowerCase()) * dir;
+        }
+        if (col === 'module') {
+            return (a.Module || '').toLowerCase().localeCompare((b.Module || '').toLowerCase()) * dir;
+        }
+        if (col === 'record') {
+            return (a.Record_ID || '').localeCompare(b.Record_ID || '', undefined, { numeric: true }) * dir;
+        }
+        if (col === 'department') {
+            return (a.Department || '').toLowerCase().localeCompare((b.Department || '').toLowerCase()) * dir;
+        }
+        if (col === 'result') {
+            return (a.Result || '').toLowerCase().localeCompare((b.Result || '').toLowerCase()) * dir;
+        }
+        return 0;
+    });
+
+    // Update sort header icons
+    const cols = ['timestamp', 'user', 'action', 'module', 'record', 'department', 'result'];
+    cols.forEach(c => {
+        const iconEl = document.getElementById(`audit-sort-icon-${c}`);
+        if (iconEl) {
+            iconEl.textContent = auditTrailState.sortBy === c ? (auditTrailState.sortDir === 'asc' ? '▲' : '▼') : '⇅';
+        }
+    });
+
+    if (!filtered.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding: 24px;">Zero audit events match the selected criteria.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(log => {
         const ts = log.Timestamp || '-';
         const user = log.User_Email || log.User_ID || 'System';
         const role = log.User_Role || '-';

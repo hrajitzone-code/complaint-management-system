@@ -248,6 +248,18 @@ class ReportService:
         else:
             selected_depts = []
 
+        # Month-Year Filter (strictly uses Complain Date)
+        month_year_filter = (filters.get('month_year') or '').strip()
+
+        # From Department Filter
+        from_dept_filter = filters.get('from_department') or filters.get('from_dept')
+        if isinstance(from_dept_filter, str):
+            selected_from_depts = [p.strip().lower() for p in from_dept_filter.split(',') if p.strip()]
+        elif isinstance(from_dept_filter, (list, tuple)):
+            selected_from_depts = [str(p).strip().lower() for p in from_dept_filter if str(p).strip()]
+        else:
+            selected_from_depts = []
+
         # 3. Multi-Vendor Filter
         selected_vendors = filters.get('vendors')
         if isinstance(selected_vendors, str):
@@ -309,6 +321,20 @@ class ReportService:
                 if start_date and comp_dt < start_date:
                     continue
                 if end_date and comp_dt > end_date:
+                    continue
+
+            # Month-Year filter (strictly uses Complain Date)
+            if month_year_filter and month_year_filter.upper() != 'ALL':
+                comp_dt = cls.parse_date(c.get('Complain Date'))
+                if not comp_dt or comp_dt.strftime('%Y-%m') != month_year_filter:
+                    continue
+
+            # From Department filter
+            if selected_from_depts and 'all' not in selected_from_depts:
+                c_from_dept = (c.get('From Department') or c.get('from_department') or '').strip().lower()
+                if not c_from_dept:
+                    c_from_dept = 'none'
+                if c_from_dept not in selected_from_depts:
                     continue
 
             # Departments filter (checks multi-department comma strings)
@@ -556,14 +582,47 @@ class ReportService:
     def sort_and_paginate(cls, records, sort_by='Complain Date', sort_dir='desc', page=1, page_size=25):
         """
         Sorts and paginates complaint records.
+        Supports both full column names and shorthand column keys.
         """
         reverse = (str(sort_dir).lower() == 'desc')
+        sort_by_lower = str(sort_by or '').strip().lower()
+
+        if sort_by_lower.endswith('_desc'):
+            reverse = True
+            sort_by_lower = sort_by_lower[:-5]
+        elif sort_by_lower.endswith('_asc'):
+            reverse = False
+            sort_by_lower = sort_by_lower[:-4]
+
+        col_mapping = {
+            'date': 'Complain Date',
+            'month': 'Complain Date',
+            'complain date': 'Complain Date',
+            'customer': 'Customer Name',
+            'customer name': 'Customer Name',
+            'id': 'Complaint ID',
+            'complaint id': 'Complaint ID',
+            'invoice': 'Invoice No.',
+            'invoice no': 'Invoice No.',
+            'invoice no.': 'Invoice No.',
+            'type': 'Complain Types',
+            'complain types': 'Complain Types',
+            'department': 'Department Name',
+            'department name': 'Department Name',
+            'priority': 'Priority',
+            'status': 'Status',
+            'handled': 'Handled By',
+            'handled by': 'Handled By',
+            'amount': 'GR Amount',
+            'gr amount': 'GR Amount'
+        }
+        resolved_sort_by = col_mapping.get(sort_by_lower, sort_by or 'Complain Date')
 
         def sort_key(rec):
-            val = rec.get(sort_by, '')
-            if sort_by in ('GR Amount',):
+            val = rec.get(resolved_sort_by, '')
+            if resolved_sort_by in ('GR Amount',):
                 return cls.parse_float(val)
-            if sort_by in ('Complain Date', 'Closing Date', 'GR Expected Date', 'Timestamp', 'Last Updated At'):
+            if resolved_sort_by in ('Complain Date', 'Closing Date', 'GR Expected Date', 'Timestamp', 'Last Updated At'):
                 dt = cls.parse_date(val)
                 return dt or datetime.date.min
             return str(val).lower()

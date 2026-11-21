@@ -557,9 +557,31 @@
                         </div>
 
                         <!-- Filter Controls Bar -->
-                        <div class="table-actions" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; padding: 0 4px;">
-                            <div style="flex: 1 1 240px;">
+                        <div class="table-actions" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; padding: 0 4px; align-items: center;">
+                            <div style="flex: 1 1 220px;">
                                 <input type="text" id="my-search-input" class="search-input" style="width: 100%;" placeholder="Search ID, Customer, Mobile, Invoice, Issue, Remarks...">
+                            </div>
+                            <div>
+                                <select id="my-sort-by" class="filter-select" title="Sort My Complaints" onchange="handleMySortDropdownChange(event)">
+                                    <option value="date-desc" selected>Sort: Date (Newest first)</option>
+                                    <option value="date-asc">Sort: Date (Oldest first)</option>
+                                    <option value="customer-asc">Sort: Customer (A to Z)</option>
+                                    <option value="customer-desc">Sort: Customer (Z to A)</option>
+                                    <option value="month-asc">Sort: Month-Year (Jan &rarr; Dec)</option>
+                                    <option value="month-desc">Sort: Month-Year (Dec &rarr; Jan)</option>
+                                    <option value="priority-desc">Sort: Priority (Urgent &rarr; Low)</option>
+                                    <option value="priority-asc">Sort: Priority (Low &rarr; Urgent)</option>
+                                    <option value="status-asc">Sort: Status (A to Z)</option>
+                                    <option value="status-desc">Sort: Status (Z to A)</option>
+                                    <option value="handled-asc">Sort: Handled By (A to Z)</option>
+                                    <option value="amount-desc">Sort: Amount (High to Low)</option>
+                                    <option value="amount-asc">Sort: Amount (Low to High)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <select id="my-month-year-filter" class="filter-select" title="Filter by Month-Year (Complain Date)" onchange="filterMyComplaints(1)">
+                                    <option value="ALL" selected>Month-Year: All</option>
+                                </select>
                             </div>
                             <div>
                                 <select id="my-scope-filter" class="filter-select" title="Filter by Ownership Scope">
@@ -615,9 +637,65 @@
                                 </select>
                             </div>
                             <div>
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="resetMyFilters()" title="Reset all filters">
-                                    Reset Filters
+                                <button type="button" class="btn btn-outline-secondary btn-sm" id="btn-toggle-my-advanced" onclick="toggleMyAdvancedFilters()" title="Toggle advanced date range, vendor, salesperson, and amount filters">
+                                    ⚡ Advanced Filters
                                 </button>
+                            </div>
+                            <div>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="resetMyFilters()" title="Clear all filters and restore full view">
+                                    Clear All Filters
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Collapsible Advanced Filters Panel for My Complaints -->
+                        <div id="my-advanced-filters-panel" class="advanced-filters-panel" style="display: none;">
+                            <div class="filter-form-grid">
+                                <div class="filter-field-group">
+                                    <label for="my-from-date">From Date (Complain Date)</label>
+                                    <input type="date" id="my-from-date" title="Filter Complain Date starting from" onchange="filterMyComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="my-to-date">To Date (Complain Date)</label>
+                                    <input type="date" id="my-to-date" title="Filter Complain Date ending at" onchange="filterMyComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="my-vendor-filter">Vendor Name</label>
+                                    <input type="text" id="my-vendor-filter" list="my-vendor-datalist" placeholder="Search vendor..." oninput="filterMyComplaints(1)">
+                                    <datalist id="my-vendor-datalist"></datalist>
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="my-salesperson-filter">Salesperson</label>
+                                    <input type="text" id="my-salesperson-filter" list="my-salesperson-datalist" placeholder="Search salesperson..." oninput="filterMyComplaints(1)">
+                                    <datalist id="my-salesperson-datalist"></datalist>
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="my-type-filter">Complaint Type / Issue</label>
+                                    <input type="text" id="my-type-filter" list="my-type-datalist" placeholder="Search type..." oninput="filterMyComplaints(1)">
+                                    <datalist id="my-type-datalist"></datalist>
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="my-handled-filter">Handled By</label>
+                                    <input type="text" id="my-handled-filter" list="my-handled-datalist" placeholder="Search handler..." oninput="filterMyComplaints(1)">
+                                    <datalist id="my-handled-datalist"></datalist>
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="my-invoice-filter">Invoice No.</label>
+                                    <input type="text" id="my-invoice-filter" placeholder="Invoice number..." oninput="filterMyComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="my-min-amount">Min GR Amount</label>
+                                    <input type="number" id="my-min-amount" placeholder="Min ₹" min="0" step="any" oninput="filterMyComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="my-max-amount">Max GR Amount</label>
+                                    <input type="number" id="my-max-amount" placeholder="Max ₹" min="0" step="any" oninput="filterMyComplaints(1)">
+                                </div>
+                                <div class="filter-action-btn-group">
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="resetMyFilters()" style="height: 35px; white-space: nowrap;">
+                                        Clear All Filters
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -640,15 +718,33 @@
                             <table class="data-table">
                                 <thead>
                                     <tr>
-                                        <th>Complaint ID</th>
-                                        <th>Customer</th>
-                                        <th>Invoice No.</th>
-                                        <th>Type / Issue</th>
-                                        <th>Department</th>
-                                        <th>Priority</th>
-                                        <th>Status</th>
-                                        <th>Handled By</th>
-                                        <th>Date</th>
+                                        <th class="sortable-th" onclick="handleMyColumnSort('id')" title="Click to sort by Complaint ID">
+                                            Complaint ID <span class="sort-icon" id="my-sort-icon-id">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleMyColumnSort('customer')" title="Click to sort by Customer Name">
+                                            Customer <span class="sort-icon" id="my-sort-icon-customer">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleMyColumnSort('invoice')" title="Click to sort by Invoice No.">
+                                            Invoice No. <span class="sort-icon" id="my-sort-icon-invoice">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleMyColumnSort('type')" title="Click to sort by Type / Issue">
+                                            Type / Issue <span class="sort-icon" id="my-sort-icon-type">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleMyColumnSort('department')" title="Click to sort by Department">
+                                            Department <span class="sort-icon" id="my-sort-icon-department">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleMyColumnSort('priority')" title="Click to sort by Priority">
+                                            Priority <span class="sort-icon" id="my-sort-icon-priority">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleMyColumnSort('status')" title="Click to sort by Status">
+                                            Status <span class="sort-icon" id="my-sort-icon-status">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleMyColumnSort('handled')" title="Click to sort by Handled By">
+                                            Handled By <span class="sort-icon" id="my-sort-icon-handled">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleMyColumnSort('date')" title="Click to sort by Complain Date">
+                                            Date <span class="sort-icon" id="my-sort-icon-date">▼</span>
+                                        </th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
@@ -699,8 +795,33 @@
                                     Template
                                 </button>
                                 <input type="text" id="manage-search-input" class="search-input" placeholder="Search ID, Customer, Mobile, Invoice, Vendor...">
+                                <select id="manage-sort-by" class="filter-select" title="Sort Complaints" onchange="handleManageSortDropdownChange(event)">
+                                    <option value="date-desc" selected>Sort: Date (Newest first)</option>
+                                    <option value="date-asc">Sort: Date (Oldest first)</option>
+                                    <option value="customer-asc">Sort: Customer (A to Z)</option>
+                                    <option value="customer-desc">Sort: Customer (Z to A)</option>
+                                    <option value="month-asc">Sort: Month-Year (Jan &rarr; Dec)</option>
+                                    <option value="month-desc">Sort: Month-Year (Dec &rarr; Jan)</option>
+                                    <option value="priority-desc">Sort: Priority (Urgent &rarr; Low)</option>
+                                    <option value="priority-asc">Sort: Priority (Low &rarr; Urgent)</option>
+                                    <option value="status-asc">Sort: Status (A to Z)</option>
+                                    <option value="status-desc">Sort: Status (Z to A)</option>
+                                    <option value="handled-asc">Sort: Handled By (A to Z)</option>
+                                    <option value="amount-desc">Sort: Amount (High to Low)</option>
+                                    <option value="amount-asc">Sort: Amount (Low to High)</option>
+                                </select>
+                                <select id="manage-month-year-filter" class="filter-select" title="Filter by Month-Year (Complain Date)" onchange="filterManageComplaints(1)">
+                                    <option value="ALL" selected>Month-Year: All</option>
+                                </select>
                                 <select id="manage-dept-filter" class="filter-select">
                                     <option value="ALL">All Departments</option>
+                                </select>
+                                <select id="manage-from-dept-filter" class="filter-select" title="Filter by From Department" onchange="filterManageComplaints(1)">
+                                    <option value="ALL" selected>From Dept: All</option>
+                                    <option value="Online">Online</option>
+                                    <option value="Offline">Offline</option>
+                                    <option value="Packing">Packing</option>
+                                    <option value="None">None</option>
                                 </select>
                                 <select id="manage-priority-filter" class="filter-select">
                                     <option value="ALL">All Priorities</option>
@@ -717,6 +838,71 @@
                                     <option value="Resolved">Resolved</option>
                                     <option value="Closed">Closed</option>
                                 </select>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" id="btn-toggle-manage-advanced" onclick="toggleManageAdvancedFilters()" title="Toggle advanced date range, vendor, salesperson, and amount filters">
+                                    ⚡ Advanced Filters
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="resetManageFilters()" title="Clear all filters and restore full view">
+                                    Clear All Filters
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Collapsible Advanced Filters Panel for Manage Complaints -->
+                        <div id="manage-advanced-filters-panel" class="advanced-filters-panel" style="display: none;">
+                            <div class="filter-form-grid">
+                                <div class="filter-field-group">
+                                    <label for="manage-from-date">From Date (Complain Date)</label>
+                                    <input type="date" id="manage-from-date" title="Filter Complain Date starting from" onchange="filterManageComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-to-date">To Date (Complain Date)</label>
+                                    <input type="date" id="manage-to-date" title="Filter Complain Date ending at" onchange="filterManageComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-vendor-filter">Vendor Name</label>
+                                    <input type="text" id="manage-vendor-filter" list="manage-vendor-datalist" placeholder="Search vendor..." oninput="filterManageComplaints(1)">
+                                    <datalist id="manage-vendor-datalist"></datalist>
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-salesperson-filter">Salesperson</label>
+                                    <input type="text" id="manage-salesperson-filter" list="manage-salesperson-datalist" placeholder="Search salesperson..." oninput="filterManageComplaints(1)">
+                                    <datalist id="manage-salesperson-datalist"></datalist>
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-type-filter">Complaint Type / Issue</label>
+                                    <input type="text" id="manage-type-filter" list="manage-type-datalist" placeholder="Search type..." oninput="filterManageComplaints(1)">
+                                    <datalist id="manage-type-datalist"></datalist>
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-handled-filter">Handled By</label>
+                                    <input type="text" id="manage-handled-filter" list="manage-handled-datalist" placeholder="Search handler..." oninput="filterManageComplaints(1)">
+                                    <datalist id="manage-handled-datalist"></datalist>
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-category-filter">Category</label>
+                                    <input type="text" id="manage-category-filter" placeholder="Filter category..." oninput="filterManageComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-invoice-filter">Invoice No.</label>
+                                    <input type="text" id="manage-invoice-filter" placeholder="Invoice number..." oninput="filterManageComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-customer-filter">Customer / Mobile</label>
+                                    <input type="text" id="manage-customer-filter" placeholder="Customer name or mobile..." oninput="filterManageComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-min-amount">Min GR Amount</label>
+                                    <input type="number" id="manage-min-amount" placeholder="Min ₹" min="0" step="any" oninput="filterManageComplaints(1)">
+                                </div>
+                                <div class="filter-field-group">
+                                    <label for="manage-max-amount">Max GR Amount</label>
+                                    <input type="number" id="manage-max-amount" placeholder="Max ₹" min="0" step="any" oninput="filterManageComplaints(1)">
+                                </div>
+                                <div class="filter-action-btn-group">
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="resetManageFilters()" style="height: 35px; white-space: nowrap;">
+                                        Clear All Filters
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -745,15 +931,33 @@
                             <table class="data-table">
                                 <thead>
                                     <tr>
-                                        <th>Complaint ID</th>
-                                        <th>Customer</th>
-                                        <th>Invoice No.</th>
-                                        <th>Type / Issue</th>
-                                        <th>Department</th>
-                                        <th>Priority</th>
-                                        <th>Status</th>
-                                        <th>Handled By</th>
-                                        <th>Date</th>
+                                        <th class="sortable-th" onclick="handleManageColumnSort('id')" title="Click to sort by Complaint ID">
+                                            Complaint ID <span class="sort-icon" id="manage-sort-icon-id">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleManageColumnSort('customer')" title="Click to sort by Customer Name">
+                                            Customer <span class="sort-icon" id="manage-sort-icon-customer">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleManageColumnSort('invoice')" title="Click to sort by Invoice No.">
+                                            Invoice No. <span class="sort-icon" id="manage-sort-icon-invoice">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleManageColumnSort('type')" title="Click to sort by Type / Issue">
+                                            Type / Issue <span class="sort-icon" id="manage-sort-icon-type">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleManageColumnSort('department')" title="Click to sort by Department">
+                                            Department <span class="sort-icon" id="manage-sort-icon-department">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleManageColumnSort('priority')" title="Click to sort by Priority">
+                                            Priority <span class="sort-icon" id="manage-sort-icon-priority">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleManageColumnSort('status')" title="Click to sort by Status">
+                                            Status <span class="sort-icon" id="manage-sort-icon-status">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleManageColumnSort('handled')" title="Click to sort by Handled By">
+                                            Handled By <span class="sort-icon" id="manage-sort-icon-handled">⇅</span>
+                                        </th>
+                                        <th class="sortable-th" onclick="handleManageColumnSort('date')" title="Click to sort by Complain Date">
+                                            Date <span class="sort-icon" id="manage-sort-icon-date">▼</span>
+                                        </th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
@@ -928,15 +1132,22 @@
                         <!-- User Management -->
                         <div class="panel-card">
                             <div class="panel-header" style="flex-wrap: wrap; gap: 10px;">
-                                <h3>Users & Staff</h3>
-                                <div style="display: flex; gap: 8px; align-items: center;">
-                                    <label for="users-status-filter" style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">Status:</label>
-                                    <select id="users-status-filter" class="form-control" style="width: auto; padding: 4px 10px; font-size: 0.85rem;" onchange="renderUsersTable()">
-                                        <option value="ALL" selected>All Users</option>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <h3 style="margin: 0;">Users &amp; Staff</h3>
+                                    <span id="users-live-count" class="badge" style="background: #f1f5f9; color: #334155; font-size: 0.78rem; font-weight: 600;">Total: 0 | Filtered: 0</span>
+                                </div>
+                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                    <input type="text" id="users-search-input" class="form-control" placeholder="Search user..." style="width: 120px; padding: 4px 8px; font-size: 0.82rem;" oninput="renderUsersTable()">
+                                    <select id="users-status-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.82rem;" onchange="renderUsersTable()">
+                                        <option value="ALL" selected>All Status</option>
                                         <option value="ACTIVE">Active</option>
                                         <option value="INACTIVE">Inactive</option>
                                         <option value="ARCHIVED">Archived</option>
                                     </select>
+                                    <select id="users-role-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.82rem;" onchange="renderUsersTable()">
+                                        <option value="ALL" selected>All Roles</option>
+                                    </select>
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="resetUsersFilters()" title="Reset user filters">Clear</button>
                                     <button class="btn btn-primary btn-sm" onclick="openCreateUserModal()">+ Add User</button>
                                 </div>
                             </div>
@@ -944,12 +1155,12 @@
                                 <table class="data-table">
                                     <thead>
                                         <tr>
-                                            <th>User ID</th>
-                                            <th>Name</th>
-                                            <th>Email</th>
-                                            <th>Role</th>
-                                            <th>Department</th>
-                                            <th>Status</th>
+                                            <th class="sortable-th" onclick="handleUserColumnSort('id')" title="Click to sort">User ID <span class="sort-icon" id="user-sort-icon-id">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleUserColumnSort('name')" title="Click to sort">Name <span class="sort-icon" id="user-sort-icon-name">▲</span></th>
+                                            <th class="sortable-th" onclick="handleUserColumnSort('email')" title="Click to sort">Email <span class="sort-icon" id="user-sort-icon-email">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleUserColumnSort('role')" title="Click to sort">Role <span class="sort-icon" id="user-sort-icon-role">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleUserColumnSort('department')" title="Click to sort">Department <span class="sort-icon" id="user-sort-icon-department">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleUserColumnSort('status')" title="Click to sort">Status <span class="sort-icon" id="user-sort-icon-status">⇅</span></th>
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
@@ -962,19 +1173,31 @@
 
                         <!-- Department Management -->
                         <div class="panel-card">
-                            <div class="panel-header">
-                                <h3>Departments</h3>
-                                <button class="btn btn-primary btn-sm" onclick="openCreateDeptModal()">+ Add Department</button>
+                            <div class="panel-header" style="flex-wrap: wrap; gap: 10px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <h3 style="margin: 0;">Departments</h3>
+                                    <span id="depts-live-count" class="badge" style="background: #f1f5f9; color: #334155; font-size: 0.78rem; font-weight: 600;">Total: 0 | Filtered: 0</span>
+                                </div>
+                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                    <input type="text" id="depts-search-input" class="form-control" placeholder="Search depts..." style="width: 120px; padding: 4px 8px; font-size: 0.82rem;" oninput="renderAdminDeptsTable()">
+                                    <select id="depts-status-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.82rem;" onchange="renderAdminDeptsTable()">
+                                        <option value="ALL">All Status</option>
+                                        <option value="ACTIVE" selected>Active</option>
+                                        <option value="INACTIVE">Inactive</option>
+                                    </select>
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="resetDeptsFilters()" title="Reset department filters">Clear</button>
+                                    <button class="btn btn-primary btn-sm" onclick="openCreateDeptModal()">+ Add Dept</button>
+                                </div>
                             </div>
                             <div class="table-responsive">
                                 <table class="data-table">
                                     <thead>
                                         <tr>
-                                            <th>ID</th>
-                                            <th>Department Name</th>
-                                            <th>Description</th>
-                                            <th>Lead Email</th>
-                                            <th>Status</th>
+                                            <th class="sortable-th" onclick="handleDeptColumnSort('id')" title="Click to sort">ID <span class="sort-icon" id="dept-sort-icon-id">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleDeptColumnSort('name')" title="Click to sort">Department Name <span class="sort-icon" id="dept-sort-icon-name">▲</span></th>
+                                            <th class="sortable-th" onclick="handleDeptColumnSort('description')" title="Click to sort">Description <span class="sort-icon" id="dept-sort-icon-description">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleDeptColumnSort('lead')" title="Click to sort">Lead Email <span class="sort-icon" id="dept-sort-icon-lead">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleDeptColumnSort('status')" title="Click to sort">Status <span class="sort-icon" id="dept-sort-icon-status">⇅</span></th>
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
@@ -1028,10 +1251,10 @@
                                 <table class="data-table">
                                     <thead>
                                         <tr>
-                                            <th>Type ID</th>
-                                            <th>Name</th>
-                                            <th>Description</th>
-                                            <th>Status</th>
+                                            <th class="sortable-th" onclick="handleMasterCTColumnSort('id')" title="Click to sort">Type ID <span class="sort-icon" id="ct-sort-icon-id">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleMasterCTColumnSort('name')" title="Click to sort">Name <span class="sort-icon" id="ct-sort-icon-name">▲</span></th>
+                                            <th class="sortable-th" onclick="handleMasterCTColumnSort('description')" title="Click to sort">Description <span class="sort-icon" id="ct-sort-icon-description">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleMasterCTColumnSort('status')" title="Click to sort">Status <span class="sort-icon" id="ct-sort-icon-status">⇅</span></th>
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
@@ -1063,10 +1286,10 @@
                                 <table class="data-table">
                                     <thead>
                                         <tr>
-                                            <th>SP ID</th>
-                                            <th>Name</th>
-                                            <th>Phone / Email</th>
-                                            <th>Status</th>
+                                            <th class="sortable-th" onclick="handleMasterSPColumnSort('id')" title="Click to sort">SP ID <span class="sort-icon" id="sp-sort-icon-id">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleMasterSPColumnSort('name')" title="Click to sort">Name <span class="sort-icon" id="sp-sort-icon-name">▲</span></th>
+                                            <th class="sortable-th" onclick="handleMasterSPColumnSort('contact')" title="Click to sort">Phone / Email <span class="sort-icon" id="sp-sort-icon-contact">⇅</span></th>
+                                            <th class="sortable-th" onclick="handleMasterSPColumnSort('status')" title="Click to sort">Status <span class="sort-icon" id="sp-sort-icon-status">⇅</span></th>
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
@@ -1484,7 +1707,20 @@
                                 <h3 style="margin-bottom: 2px;">Enterprise Role &amp; Permission Builder</h3>
                                 <p class="text-muted" style="font-size: 0.85rem; margin: 0;">Configure roles, assign granular permissions, and restrict data scopes directly persisted to Google Sheets.</p>
                             </div>
-                            <div style="display: flex; gap: 8px;">
+                            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                <input type="text" id="roles-search-input" class="form-control" placeholder="Search roles..." style="width: 130px; padding: 4px 8px; font-size: 0.82rem;" oninput="renderRolesTable()">
+                                <select id="roles-scope-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.82rem;" onchange="renderRolesTable()">
+                                    <option value="ALL">All Scopes</option>
+                                    <option value="ALL_SCOPE">ALL (Org-wide)</option>
+                                    <option value="DEPARTMENT">DEPARTMENT</option>
+                                    <option value="OWN">OWN</option>
+                                </select>
+                                <select id="roles-type-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.82rem;" onchange="renderRolesTable()">
+                                    <option value="ALL">All Types</option>
+                                    <option value="SYSTEM">System Roles</option>
+                                    <option value="CUSTOM">Custom Roles</option>
+                                </select>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="resetRolesFilters()">Clear</button>
                                 <button type="button" class="btn btn-outline-secondary btn-sm" onclick="loadRolesData()">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                                     Refresh Roles
@@ -1508,11 +1744,11 @@
                             <table class="data-table" id="roles-table">
                                 <thead>
                                     <tr>
-                                        <th>Role Name</th>
-                                        <th>Role Type</th>
-                                        <th>Data Scope</th>
-                                        <th>Assigned Users</th>
-                                        <th>Permissions Granted</th>
+                                        <th class="sortable-th" onclick="handleRoleColumnSort('name')" title="Click to sort">Role Name <span class="sort-icon" id="role-sort-icon-name">▲</span></th>
+                                        <th class="sortable-th" onclick="handleRoleColumnSort('type')" title="Click to sort">Role Type <span class="sort-icon" id="role-sort-icon-type">⇅</span></th>
+                                        <th class="sortable-th" onclick="handleRoleColumnSort('scope')" title="Click to sort">Data Scope <span class="sort-icon" id="role-sort-icon-scope">⇅</span></th>
+                                        <th class="sortable-th" onclick="handleRoleColumnSort('users')" title="Click to sort">Assigned Users <span class="sort-icon" id="role-sort-icon-users">⇅</span></th>
+                                        <th class="sortable-th" onclick="handleRoleColumnSort('permissions')" title="Click to sort">Permissions Granted <span class="sort-icon" id="role-sort-icon-permissions">⇅</span></th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
@@ -1548,7 +1784,7 @@
 
                         <!-- Audit Filters -->
                         <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; align-items: flex-end;">
-                            <div class="form-group" style="margin: 0; min-width: 150px; flex: 1;">
+                            <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                                 <label style="font-size: 0.8rem;">Module</label>
                                 <select id="audit-filter-module" onchange="loadAuditTrailData()" style="padding: 7px 10px; font-size: 0.85rem;">
                                     <option value="">All Modules</option>
@@ -1560,7 +1796,7 @@
                                     <option value="Master Data">Master Data</option>
                                 </select>
                             </div>
-                            <div class="form-group" style="margin: 0; min-width: 150px; flex: 1;">
+                            <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                                 <label style="font-size: 0.8rem;">Action</label>
                                 <select id="audit-filter-action" onchange="loadAuditTrailData()" style="padding: 7px 10px; font-size: 0.85rem;">
                                     <option value="">All Actions</option>
@@ -1574,11 +1810,19 @@
                                     <option value="ACCESS_DENIED">ACCESS_DENIED</option>
                                 </select>
                             </div>
-                            <div class="form-group" style="margin: 0; min-width: 220px; flex: 2;">
+                            <div class="form-group" style="margin: 0; min-width: 110px; flex: 1;">
+                                <label style="font-size: 0.8rem;">Result</label>
+                                <select id="audit-filter-result" onchange="filterAuditTrailTable()" style="padding: 7px 10px; font-size: 0.85rem;">
+                                    <option value="ALL">All Results</option>
+                                    <option value="SUCCESS">SUCCESS</option>
+                                    <option value="FAILED">FAILED</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin: 0; min-width: 180px; flex: 2;">
                                 <label style="font-size: 0.8rem;">Search Log Text / User / Record ID</label>
                                 <input type="text" id="audit-filter-search" placeholder="Filter by email, ID, or details..." oninput="debounceAuditSearch()" style="padding: 7px 10px; font-size: 0.85rem;">
                             </div>
-                            <div class="form-group" style="margin: 0; width: 110px;">
+                            <div class="form-group" style="margin: 0; width: 100px;">
                                 <label style="font-size: 0.8rem;">Max Records</label>
                                 <select id="audit-filter-limit" onchange="loadAuditTrailData()" style="padding: 7px 10px; font-size: 0.85rem;">
                                     <option value="50">50</option>
@@ -1595,13 +1839,13 @@
                             <table class="data-table" id="audit-table">
                                 <thead>
                                     <tr>
-                                        <th style="min-width: 140px;">Timestamp</th>
-                                        <th>User &amp; Role</th>
-                                        <th>Action</th>
-                                        <th>Module</th>
-                                        <th>Record ID</th>
-                                        <th>Department</th>
-                                        <th>Result</th>
+                                        <th class="sortable-th" style="min-width: 140px;" onclick="handleAuditColumnSort('timestamp')" title="Click to sort">Timestamp <span class="sort-icon" id="audit-sort-icon-timestamp">▼</span></th>
+                                        <th class="sortable-th" onclick="handleAuditColumnSort('user')" title="Click to sort">User &amp; Role <span class="sort-icon" id="audit-sort-icon-user">⇅</span></th>
+                                        <th class="sortable-th" onclick="handleAuditColumnSort('action')" title="Click to sort">Action <span class="sort-icon" id="audit-sort-icon-action">⇅</span></th>
+                                        <th class="sortable-th" onclick="handleAuditColumnSort('module')" title="Click to sort">Module <span class="sort-icon" id="audit-sort-icon-module">⇅</span></th>
+                                        <th class="sortable-th" onclick="handleAuditColumnSort('record')" title="Click to sort">Record ID <span class="sort-icon" id="audit-sort-icon-record">⇅</span></th>
+                                        <th class="sortable-th" onclick="handleAuditColumnSort('department')" title="Click to sort">Department <span class="sort-icon" id="audit-sort-icon-department">⇅</span></th>
+                                        <th class="sortable-th" onclick="handleAuditColumnSort('result')" title="Click to sort">Result <span class="sort-icon" id="audit-sort-icon-result">⇅</span></th>
                                         <th style="min-width: 220px;">Details / Changes</th>
                                     </tr>
                                 </thead>

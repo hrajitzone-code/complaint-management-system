@@ -1843,3 +1843,104 @@ body.modal-open {
     border: 1px solid #cbd5e1;
     border-radius: 6px;
 }
+
+/* =============================================================================
+   GLOBAL SORTING & ADVANCED FILTER SYSTEM STYLES
+   ============================================================================= */
+
+/* Sortable Table Headers */
+th.sortable-th {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    white-space: nowrap;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+th.sortable-th:hover {
+    background-color: #f1f5f9;
+    color: #2563eb;
+}
+.sort-icon {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 0.72rem;
+    color: #94a3b8;
+    vertical-align: middle;
+    transition: color 0.15s ease, transform 0.15s ease;
+}
+th.th-sorted-asc .sort-icon {
+    color: #2563eb;
+    font-weight: 700;
+}
+th.th-sorted-desc .sort-icon {
+    color: #2563eb;
+    font-weight: 700;
+}
+
+/* Advanced Filter Panel */
+.advanced-filters-panel {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    animation: fadeInFilters 0.2s ease-in-out;
+}
+@keyframes fadeInFilters {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.filter-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    align-items: flex-end;
+}
+
+.filter-field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.filter-field-group label {
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: #475569;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.filter-field-group input,
+.filter-field-group select {
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 0.84rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #1e293b;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.filter-field-group input:focus,
+.filter-field-group select:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
+}
+
+.filter-action-btn-group {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+.filter-pill-active {
+    background-color: #eff6ff !important;
+    border-color: #3b82f6 !important;
+    color: #1d4ed8 !important;
+    font-weight: 600 !important;
+}
