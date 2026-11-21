@@ -107,6 +107,18 @@ DEFAULT_DEPARTMENTS = [
 class SheetsDB:
 
     @classmethod
+    def get_active_complaint_types(cls):
+        """Returns list of active complaint types."""
+        types = cls.get_all_complaint_types()
+        return [t for t in types if str(t.get('Is Active', 'TRUE')).upper() in ('TRUE', '1', 'YES')]
+
+    @classmethod
+    def get_active_salespersons(cls):
+        """Returns list of active salespersons."""
+        sps = cls.get_all_salespersons()
+        return [s for s in sps if str(s.get('Is Active', 'TRUE')).upper() in ('TRUE', '1', 'YES')]
+
+    @classmethod
     def get_active_departments(cls):
         """Returns active departments list."""
         return cls.get_all_departments(include_inactive=False)

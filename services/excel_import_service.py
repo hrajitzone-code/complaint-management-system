@@ -4,8 +4,11 @@ Excel Import & Template Service for AJIT ZONE PVT. LTD. Complaint Management Sys
 Features:
 - Downloadable .xlsx template with correct headers, sample format, and dropdown data validation.
 - Instructions & Reference sheet containing active departments, complaint types, salespersons, and valid values.
-- Bulk Excel parsing and comprehensive validation (mandatory fields, 10-digit mobile, dates, duplicate detection).
-- RBAC & Department-level authorization checks per row.
+- Bulk Excel parsing with Case-Insensitive Matching and Spelling Validation against master data.
+- Display formatting normalizing names and dropdown entries to standard software casing.
+- No Customer-Based Duplicate Blocking: Customers can have unlimited complaints on any date.
+- True Duplicate Protection: Prevents accidental re-import of exact identical complaints via Record ID or non-customer record fingerprint.
+- Department-level RBAC authorization checks per row.
 - Preview generation of valid vs invalid records with specific error reasons.
 - Downloadable error report (.xlsx) with highlighted rejected rows and error descriptions.
 """
@@ -45,7 +48,7 @@ TEMPLATE_COLUMNS: List[Tuple[str, str, bool, str, Optional[str]]] = [
     ('customer_name', 'Customer Name *', True, 'Anjali Gupta', None),
     ('customer_mobile', 'Customer Mobile No. *', True, '9876543210', None),
     ('complain_date', 'Complain Date * (YYYY-MM-DD)', True, '2026-11-20', None),
-    ('complain_types', 'Complain Types *', True, 'Defective Stitching', None),
+    ('complain_types', 'Complain Types *', True, 'Damage', None),
     ('department_name', 'Department Name *', True, 'Kurti', None),
     ('from_department', 'From Department *', True, 'Online', 'Online,Offline,Packing,None'),
     ('invoice_no', 'Invoice No.', False, 'INV-1001', None),
@@ -53,7 +56,7 @@ TEMPLATE_COLUMNS: List[Tuple[str, str, bool, str, Optional[str]]] = [
     ('status', 'Status', False, 'Submitted', 'Submitted,Under Review,In Progress,Resolved,Closed'),
     ('category', 'Category', False, 'Apparel', None),
     ('vendor_name', 'Vendor Name', False, 'Raj Textiles', None),
-    ('salesperson_name', 'Salesperson Name', False, 'Rahul Kumar', None),
+    ('salesperson_name', 'Salesperson Name', False, 'Nikita Vaishnav', None),
     ('handled_by', 'Handled By', False, 'NITA', None),
     ('remarks', 'Remarks', False, 'Customer reported loose stitch on sleeve hem', None),
     ('complain_details', 'Complain Details', False, 'Stitching defect near sleeve junction', None),
@@ -61,6 +64,7 @@ TEMPLATE_COLUMNS: List[Tuple[str, str, bool, str, Optional[str]]] = [
     ('solution_given', 'Solution Given', False, '', None),
     ('gr_amount', 'GR Amount', False, '', None),
     ('gr_expected_date', 'GR Expected Date (YYYY-MM-DD)', False, '', None),
+    ('record_id', 'Record ID (Optional)', False, '', None)
 ]
 
 # Aliases for flexible header mapping
@@ -105,13 +109,12 @@ HEADER_ALIASES: Dict[str, str] = {
     'priority': 'priority',
     'status': 'status',
     'category': 'category',
-
     'vendorname': 'vendor_name',
     'vendor': 'vendor_name',
 
     'salespersonname': 'salesperson_name',
     'salesperson': 'salesperson_name',
-    'salesman': 'salesperson_name',
+    'salesrep': 'salesperson_name',
 
     'handledby': 'handled_by',
     'assignedto': 'handled_by',
@@ -123,10 +126,11 @@ HEADER_ALIASES: Dict[str, str] = {
 
     'complaindetails': 'complain_details',
     'complaintdetails': 'complain_details',
-    'description': 'complain_details',
     'details': 'complain_details',
+    'description': 'complain_details',
 
     'closingdate': 'closing_date',
+    'closeddate': 'closing_date',
     'resolutiondate': 'closing_date',
 
     'solutiongiven': 'solution_given',
@@ -134,15 +138,24 @@ HEADER_ALIASES: Dict[str, str] = {
     'resolution': 'solution_given',
 
     'gramount': 'gr_amount',
-    'amount': 'gr_amount',
+    'goodsreturnamount': 'gr_amount',
+    'returnamount': 'gr_amount',
 
     'grexpecteddate': 'gr_expected_date',
-    'expecteddate': 'gr_expected_date'
+    'expectedgrdate': 'gr_expected_date',
+
+    'recordid': 'record_id',
+    'importid': 'record_id',
+    'complaintid': 'record_id',
+    'complainid': 'record_id',
+    'uniqueid': 'record_id',
+    'externalid': 'record_id',
+    'referenceid': 'record_id'
 }
 
 
 class ExcelImportService:
-    """Service handling Excel complaint template generation, parsing, validation, and error reporting."""
+    """Service to handle Excel template generation, validation, and error reporting."""
 
     @classmethod
     def generate_template(cls, db_engine=None, authorized_departments: Optional[List[str]] = None) -> io.BytesIO:
@@ -181,49 +194,75 @@ class ExcelImportService:
             cell.fill = req_navy_fill if is_req else navy_fill
             cell.alignment = center_align
             cell.border = grid_border
+            ws.column_dimensions[get_column_letter(col_idx)].width = max(len(label) + 4, 16)
 
         # Sample Rows (Rows 2 & 3)
         sample_row_1 = [col[3] for col in TEMPLATE_COLUMNS]
         sample_row_2 = [
-            'Sneha Rao', '9876543211', '2026-11-20', 'Color Bleeding', 'Saree',
-            'Offline', 'INV-1002', 'High', 'Under Review', 'Silk', 'Vendor B',
-            'Direct', 'NITA', 'Fabric bleeding color on first dry clean',
-            'Customer requested replacement or credit note', '', '', '', ''
+            'Rahul Sharma', '9876500001', '2026-11-20', 'Damage',
+            'Dress Material', 'Offline', 'INV-1002', 'High', 'Submitted',
+            'Fabric', 'Kalyan Mills', 'Komal Vaishnav', 'NITA',
+            'Packing seal broken during cargo delivery', 'Cargo transit damage', '', '', '2450.00', '2026-11-25', ''
         ]
+
         ws.append(sample_row_1)
         ws.append(sample_row_2)
 
-        for r_idx in (2, 3):
-            ws.row_dimensions[r_idx].height = 22
+        for row_idx in (2, 3):
+            ws.row_dimensions[row_idx].height = 22
             for col_idx in range(1, len(TEMPLATE_COLUMNS) + 1):
-                cell = ws.cell(row=r_idx, column=col_idx)
-                cell.font = sample_font
-                cell.alignment = left_align
-                cell.border = grid_border
+                c = ws.cell(row=row_idx, column=col_idx)
+                c.font = sample_font
+                c.border = grid_border
+                c.alignment = left_align
+
+        # Data Validations (Dropdowns on Sheet 1)
+        # From Department Dropdown (Col 6)
+        dv_from_dept = DataValidation(type="list", formula1='"Online,Offline,Packing,None"', allow_blank=False)
+        dv_from_dept.error = "Please choose a valid From Department (Online, Offline, Packing, None)."
+        dv_from_dept.errorTitle = "Invalid From Department"
+        ws.add_data_validation(dv_from_dept)
+        dv_from_dept.add(f"F2:F2000")
+
+        # Priority Dropdown (Col 8)
+        dv_priority = DataValidation(type="list", formula1='"Low,Medium,High,Urgent"', allow_blank=True)
+        dv_priority.error = "Please select Low, Medium, High, or Urgent."
+        dv_priority.errorTitle = "Invalid Priority"
+        ws.add_data_validation(dv_priority)
+        dv_priority.add(f"H2:H2000")
+
+        # Status Dropdown (Col 9)
+        dv_status = DataValidation(type="list", formula1='"Submitted,Under Review,In Progress,Resolved,Closed"', allow_blank=True)
+        dv_status.error = "Please select a standard Complaint Status."
+        dv_status.errorTitle = "Invalid Status"
+        ws.add_data_validation(dv_status)
+        dv_status.add(f"I2:I2000")
 
         # -------------------------------------------------------------
-        # Sheet 2: Instructions & Reference Data
+        # Sheet 2: Instructions & Reference
         # -------------------------------------------------------------
         ws_ref = wb.create_sheet(title="Instructions & Reference")
         ws_ref.views.sheetView[0].showGridLines = True
 
         # Title
-        ws_ref.cell(row=1, column=1, value="Ajit Zone Pvt. Ltd. — Complaints Excel Import Guide").font = Font(name="Calibri", size=14, bold=True, color="1E3A8A")
+        ws_ref.cell(row=1, column=1, value="Ajit Zone Pvt. Ltd. - Complaints Excel Import Guide").font = Font(name="Calibri", size=14, bold=True, color="1E3A8A")
         ws_ref.cell(row=2, column=1, value="Please adhere to the format rules below. Asterisk (*) denotes a mandatory column.").font = Font(name="Calibri", size=10, italic=True)
 
         instructions = [
             ("Field Name", "Requirement", "Allowed Format / Accepted Values"),
-            ("Customer Name *", "Mandatory", "Text (min 2 characters, e.g. Anjali Gupta)"),
-            ("Customer Mobile No. *", "Mandatory", "Exactly 10 numeric digits (e.g. 9876543210)"),
+            ("Customer Name *", "Mandatory", "Text (e.g. Rahul Sharma, accepted in ANY case: RAHUL SHARMA, rahul sharma)"),
+            ("Customer Mobile No. *", "Mandatory", "Exactly 10 numeric digits (e.g. 9876543210). Unlimited complaints per customer allowed!"),
             ("Complain Date *", "Mandatory", "Date formatted as YYYY-MM-DD (e.g. 2026-11-20)"),
-            ("Complain Types *", "Mandatory", "Issue category or description (e.g. Defective Stitching, Color Bleeding)"),
-            ("Department Name *", "Mandatory", "Company department (must match authorized department list below)"),
-            ("From Department *", "Mandatory", "Online, Offline, Packing, None"),
+            ("Complain Types *", "Mandatory", "Master complaint type (e.g. Damage, Wrong Product, Quality, Bilty - case-insensitive)"),
+            ("Department Name *", "Mandatory", "Active company department (e.g. Kurti, Saree, Dress Material, Online - case-insensitive)"),
+            ("From Department *", "Mandatory", "Online, Offline, Packing, None (case-insensitive)"),
             ("Invoice No.", "Optional", "Customer bill or invoice number (e.g. INV-1001)"),
             ("Priority", "Optional", "Low, Medium, High, Urgent (Defaults to Medium if blank)"),
             ("Status", "Optional", "Submitted, Under Review, In Progress, Resolved, Closed (Defaults to Submitted)"),
+            ("Salesperson Name", "Optional", "Active salesperson name from master data (case-insensitive)"),
             ("Closing Date", "Optional", "YYYY-MM-DD (Must be on or after Complain Date)"),
             ("GR Amount", "Optional", "Numeric amount (e.g. 1500.00)"),
+            ("Record ID", "Optional", "Unique external identifier to prevent duplicate re-import (e.g. REC-1001)")
         ]
 
         ws_ref.cell(row=4, column=1, value="Format Specifications:").font = Font(name="Calibri", size=11, bold=True)
@@ -242,11 +281,16 @@ class ExcelImportService:
                 c2.font = header_font
                 c3.font = header_font
 
-        # Active Departments list in reference sheet
+        # Active Reference Data in reference sheet
         active_depts = []
         if db_engine:
             try:
-                dept_records = db_engine.get_active_departments()
+                if hasattr(db_engine, 'get_active_departments'):
+                    dept_records = db_engine.get_active_departments()
+                elif hasattr(db_engine, 'get_all_departments'):
+                    dept_records = db_engine.get_all_departments(include_inactive=False)
+                else:
+                    dept_records = []
                 active_depts = [d.get('Name') for d in dept_records if d.get('Name')]
             except Exception:
                 pass
@@ -263,58 +307,22 @@ class ExcelImportService:
         ws_ref.cell(row=ref_start_row, column=1, value="Active Company Departments:").font = Font(name="Calibri", size=11, bold=True)
         dept_start_row = ref_start_row + 1
         for idx, dept_name in enumerate(active_depts, start=dept_start_row):
-            d_cell = ws_ref.cell(row=idx, column=1, value=dept_name)
-            d_cell.font = data_font
-            d_cell.border = grid_border
-        dept_end_row = dept_start_row + len(active_depts) - 1
+            cell = ws_ref.cell(row=idx, column=1, value=dept_name)
+            cell.font = data_font
+            cell.border = grid_border
 
-        # -------------------------------------------------------------
-        # Dropdown Data Validations on Template Sheet
-        # -------------------------------------------------------------
-        try:
-            # 1. From Department Dropdown (Column F: F2:F1000)
-            dv_from = DataValidation(type="list", formula1='"Online,Offline,Packing,None"', allow_blank=False)
-            dv_from.errorTitle = "Invalid From Department"
-            dv_from.error = "Please select Online, Offline, Packing, or None."
-            ws.add_data_validation(dv_from)
-            dv_from.add("F2:F1000")
+        # From Department options section in reference sheet
+        from_dept_start_row = ref_start_row
+        ws_ref.cell(row=from_dept_start_row, column=3, value="Valid 'From Department' Values:").font = Font(name="Calibri", size=11, bold=True)
+        for idx, fd in enumerate(['Online', 'Offline', 'Packing', 'None'], start=from_dept_start_row + 1):
+            cell = ws_ref.cell(row=idx, column=3, value=fd)
+            cell.font = data_font
+            cell.border = grid_border
 
-            # 2. Priority Dropdown (Column H: H2:H1000)
-            dv_prio = DataValidation(type="list", formula1='"Low,Medium,High,Urgent"', allow_blank=True)
-            dv_prio.errorTitle = "Invalid Priority"
-            dv_prio.error = "Please select Low, Medium, High, or Urgent."
-            ws.add_data_validation(dv_prio)
-            dv_prio.add("H2:H1000")
-
-            # 3. Status Dropdown (Column I: I2:I1000)
-            dv_stat = DataValidation(type="list", formula1='"Submitted,Under Review,In Progress,Resolved,Closed"', allow_blank=True)
-            dv_stat.errorTitle = "Invalid Status"
-            dv_stat.error = "Please select a valid complaint status."
-            ws.add_data_validation(dv_stat)
-            dv_stat.add("I2:I1000")
-
-            # 4. Department Name Dropdown (Column E: E2:E1000)
-            if active_depts:
-                dept_formula = f"'Instructions & Reference'!$A${dept_start_row}:$A${dept_end_row}"
-                dv_dept = DataValidation(type="list", formula1=dept_formula, allow_blank=False)
-                dv_dept.errorTitle = "Invalid Department"
-                dv_dept.error = "Please select a valid company department from the list."
-                ws.add_data_validation(dv_dept)
-                dv_dept.add("E2:E1000")
-        except Exception as dv_err:
-            logger.warning(f"Could not apply data validation dropdowns: {dv_err}")
-
-        # Auto-adjust column widths on both sheets
-        for sheet in (ws, ws_ref):
-            for col in sheet.columns:
-                max_len = 0
-                col_letter = get_column_letter(col[0].column)
-                for cell in col:
-                    val_str = str(cell.value or '')
-                    if '\n' in val_str:
-                        val_str = max(val_str.split('\n'), key=len)
-                    max_len = max(max_len, len(val_str))
-                sheet.column_dimensions[col_letter].width = max(max_len + 4, 14)
+        # Auto-adjust column widths on Sheet 2
+        ws_ref.column_dimensions['A'].width = 28
+        ws_ref.column_dimensions['B'].width = 16
+        ws_ref.column_dimensions['C'].width = 50
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -369,7 +377,8 @@ class ExcelImportService:
     def parse_and_validate(cls, file_stream, current_user: Dict[str, Any], db_engine=None) -> Dict[str, Any]:
         """
         Parses uploaded Excel workbook, validates each row against mandatory fields,
-        master data, RBAC department scope, and duplicate detection.
+        master data (case-insensitively with spelling validation), RBAC department scope,
+        and true duplicate protection (allowing unlimited complaints per customer).
         Returns preview data and preview token.
         """
         _cleanup_preview_cache()
@@ -418,13 +427,23 @@ class ExcelImportService:
         if missing_required:
             raise ValueError(f"Missing mandatory columns in Excel header: {', '.join(sorted(missing_required))}. Please use the official template.")
 
-        # Fetch active reference data from db_engine
-        active_dept_map: Dict[str, str] = {} # lower -> canonical
-        existing_complaint_keys = set()
+        # -------------------------------------------------------------
+        # Master Data Maps (case-insensitive lookup: normalized_lower -> canonical)
+        # -------------------------------------------------------------
+        active_dept_map: Dict[str, str] = {}
+        active_types_map: Dict[str, str] = {}
+        active_salespersons_map: Dict[str, str] = {}
+
+        # Duplicate checking sets (NO customer name or mobile blocking!)
+        existing_complaint_ids = set()
+        existing_record_ids = set()
+        existing_record_fingerprints = set()
+
         user_depts = [d.lower() for d in RBACService.get_user_departments(current_user)]
         user_has_all_scope = '*' in user_depts or 'all' in user_depts or current_user.get('role') in ('Super Admin', 'Admin')
 
         if db_engine:
+            # 1. Departments
             try:
                 if hasattr(db_engine, 'get_active_departments'):
                     raw_depts = db_engine.get_active_departments()
@@ -440,18 +459,67 @@ class ExcelImportService:
             except Exception as e:
                 logger.warning(f"Could not load active departments: {e}")
 
+            # 2. Complaint Types
             try:
-                # Load existing complaints for duplicate checking
+                if hasattr(db_engine, 'get_active_complaint_types'):
+                    raw_types = db_engine.get_active_complaint_types()
+                elif hasattr(db_engine, 'get_all_complaint_types'):
+                    raw_types = [
+                        t for t in db_engine.get_all_complaint_types()
+                        if str(t.get('Is Active', 'TRUE')).upper() in ('TRUE', '1', 'YES')
+                    ]
+                else:
+                    raw_types = []
+
+                for t in raw_types:
+                    name = (t.get('Name') or t.get('Complain Types') or '').strip()
+                    if name:
+                        active_types_map[name.lower()] = name
+            except Exception as e:
+                logger.warning(f"Could not load active complaint types: {e}")
+
+            # 3. Salespersons
+            try:
+                if hasattr(db_engine, 'get_active_salespersons'):
+                    raw_sps = db_engine.get_active_salespersons()
+                elif hasattr(db_engine, 'get_all_salespersons'):
+                    raw_sps = [
+                        s for s in db_engine.get_all_salespersons()
+                        if str(s.get('Is Active', 'TRUE')).upper() in ('TRUE', '1', 'YES')
+                    ]
+                else:
+                    raw_sps = []
+
+                for s in raw_sps:
+                    name = (s.get('Name') or s.get('Salesperson Name') or '').strip()
+                    if name:
+                        active_salespersons_map[name.lower()] = name
+            except Exception as e:
+                logger.warning(f"Could not load active salespersons: {e}")
+
+            # 4. Existing complaints for True Duplicate checking
+            try:
                 existing = db_engine.get_all_complaints()
                 for ec in existing:
-                    inv = (ec.get('Invoice No.') or '').strip().lower()
-                    mob = (ec.get('Customer Mobile No.') or '').strip()
-                    c_date = (ec.get('Complain Date') or '').strip()
-                    c_type = (ec.get('Complain Types') or '').strip().lower()
-                    if inv and mob:
-                        existing_complaint_keys.add(f"inv:{inv}|mob:{mob}")
-                    if mob and c_date and c_type:
-                        existing_complaint_keys.add(f"mob:{mob}|date:{c_date}|type:{c_type}")
+                    cid = str(ec.get('Complaint ID') or '').strip().upper()
+                    if cid:
+                        existing_complaint_ids.add(cid)
+                    rec_id = str(ec.get('Record ID') or ec.get('Import ID') or '').strip().upper()
+                    if rec_id:
+                        existing_record_ids.add(rec_id)
+
+                    # Non-customer fingerprint: invoice + dept + from_dept + type + date + details + remarks + gr
+                    ec_inv = str(ec.get('Invoice No.') or '').strip().lower()
+                    ec_dept = str(ec.get('Department Name') or '').strip().lower()
+                    ec_from = str(ec.get('From Department') or '').strip().lower()
+                    ec_type = str(ec.get('Complain Types') or '').strip().lower()
+                    ec_date = str(ec.get('Complain Date') or '').strip()
+                    ec_details = str(ec.get('Complain Details') or '').strip().lower()
+                    ec_remarks = str(ec.get('Remarks') or '').strip().lower()
+                    ec_gr = str(ec.get('GR Amount') or '').strip()
+
+                    fp = f"{ec_inv}|{ec_dept}|{ec_from}|{ec_type}|{ec_date}|{ec_details}|{ec_remarks}|{ec_gr}"
+                    existing_record_fingerprints.add(fp)
             except Exception as e:
                 logger.warning(f"Could not load existing complaints for duplicate check: {e}")
 
@@ -466,9 +534,47 @@ class ExcelImportService:
             if d.lower() not in active_dept_map:
                 active_dept_map[d.lower()] = d
 
+        # Merge standard default complaint types
+        default_types = [
+            'Damage', 'Other', 'Wrong Product', 'Bilty', 'Quality', 'Item Mismatch',
+            'Rate issue', 'Product Defect', 'Wrong Item Delivered', 'Transit Damage',
+            'Billing Discrepancy', 'Quality Issue', 'Defective Stitching', 'Delivery Delay',
+            'Fabric Defect', 'Color Issue'
+        ]
+        for t in default_types:
+            if t.lower() not in active_types_map:
+                active_types_map[t.lower()] = t
+
+        # Merge standard default salespersons
+        default_sps = [
+            'Nikita Vaishnav', 'Komal Vaishnav', 'Gopal Ram Dodvadiya', 'Jayraj Solanki',
+            'Manisha Sirvi', 'Nita Chaudhary', 'Rahul Rajpurohit', 'Vikram Rao',
+            'Priya Sharma', 'Rahul Verma', 'Direct Store Sales'
+        ]
+        for sp in default_sps:
+            if sp.lower() not in active_salespersons_map:
+                active_salespersons_map[sp.lower()] = sp
+
+        valid_from_depts = {
+            'online': 'Online',
+            'offline': 'Offline',
+            'packing': 'Packing',
+            'none': 'None'
+        }
+
+        valid_priorities = {'low': 'Low', 'medium': 'Medium', 'high': 'High', 'urgent': 'Urgent'}
+        valid_statuses = {
+            'submitted': 'Submitted',
+            'under review': 'Under Review',
+            'in progress': 'In Progress',
+            'resolved': 'Resolved',
+            'closed': 'Closed'
+        }
+
         valid_rows: List[Dict[str, Any]] = []
         invalid_rows: List[Dict[str, Any]] = []
-        in_file_duplicate_keys = set()
+        in_file_record_ids = set()
+        in_file_fingerprints = set()
 
         sample_name_patterns = {'anjali gupta', 'sneha rao', 'sample customer', 'customer name'}
 
@@ -491,12 +597,19 @@ class ExcelImportService:
 
             errors: List[str] = []
 
-            # 1. Customer Name
-            c_name = str(row_dict.get('customer_name') or '').strip()
-            if not c_name or len(c_name) < 2:
+            # ---------------------------------------------------------
+            # 1. Customer Name (Case-Insensitive Acceptance & Standard Display Formatting)
+            # ---------------------------------------------------------
+            raw_c_name = str(row_dict.get('customer_name') or '').strip()
+            if not raw_c_name or len(raw_c_name) < 2:
                 errors.append("Customer Name is required (minimum 2 characters).")
+            # Standard software display formatting: Title Case if ALL CAPS or all lowercase
+            c_name_display = raw_c_name.title() if (raw_c_name.isupper() or raw_c_name.islower()) else raw_c_name
+            row_dict['customer_name'] = c_name_display
 
-            # 2. Customer Mobile No.
+            # ---------------------------------------------------------
+            # 2. Customer Mobile No. (Normalized 10 digits; NO duplicate blocking on mobile!)
+            # ---------------------------------------------------------
             raw_mob = row_dict.get('customer_mobile')
             c_mob = cls._clean_mobile(raw_mob)
             if not c_mob:
@@ -504,8 +617,11 @@ class ExcelImportService:
                     errors.append("Customer Mobile No. is required (must be exactly 10 digits).")
                 else:
                     errors.append(f"Customer Mobile No. '{raw_mob}' is invalid (must be exactly 10 digits).")
+            row_dict['customer_mobile'] = c_mob or str(raw_mob or '')
 
-            # 3. Complain Date
+            # ---------------------------------------------------------
+            # 3. Complain Date (YYYY-MM-DD)
+            # ---------------------------------------------------------
             raw_date = row_dict.get('complain_date')
             c_date = cls._parse_date(raw_date)
             if not c_date:
@@ -513,58 +629,105 @@ class ExcelImportService:
                     errors.append("Complain Date is required (use YYYY-MM-DD).")
                 else:
                     errors.append(f"Complain Date '{raw_date}' is invalid (use YYYY-MM-DD).")
+            row_dict['complain_date'] = c_date or str(raw_date or '')
 
-            # 4. Complain Types
-            c_type = str(row_dict.get('complain_types') or '').strip()
-            if not c_type:
+            # ---------------------------------------------------------
+            # 4. Complain Types (Case-Insensitive Spelling Validation against Master Data)
+            # ---------------------------------------------------------
+            raw_type = str(row_dict.get('complain_types') or '').strip()
+            if not raw_type:
                 errors.append("Complain Types is required.")
+                c_type = ''
+            else:
+                type_lower = re.sub(r'\s+', ' ', raw_type).lower()
+                if type_lower in active_types_map:
+                    # Standard display format from master data
+                    c_type = active_types_map[type_lower]
+                else:
+                    errors.append(f"Complain Type '{raw_type}' does not match any active complaint type in master data.")
+                    c_type = raw_type.title()
+            row_dict['complain_types'] = c_type
 
-            # 5. Department Name & RBAC authorization
+            # ---------------------------------------------------------
+            # 5. Department Name (Case-Insensitive Spelling Validation against Master Data)
+            # ---------------------------------------------------------
             raw_dept = str(row_dict.get('department_name') or '').strip()
             if not raw_dept:
                 errors.append("Department Name is required.")
+                canon_dept = ''
             else:
-                canon_dept = active_dept_map.get(raw_dept.lower())
+                dept_lower = re.sub(r'\s+', ' ', raw_dept).lower()
+                canon_dept = active_dept_map.get(dept_lower)
                 if not canon_dept:
                     errors.append(f"Department '{raw_dept}' is not an active company department.")
+                    canon_dept = raw_dept.title()
                 else:
-                    row_dict['department_name'] = canon_dept
                     # RBAC authorization check: Does this user have access to this department?
                     if not user_has_all_scope and canon_dept.lower() not in user_depts:
                         errors.append(f"Unauthorized department '{canon_dept}'. You are only permitted to lodge complaints for: {', '.join(user_depts)}.")
+            row_dict['department_name'] = canon_dept
 
-            # 6. From Department
+            # ---------------------------------------------------------
+            # 6. From Department (Case-Insensitive Spelling Validation: Online, Offline, Packing, None)
+            # ---------------------------------------------------------
             raw_from_dept = str(row_dict.get('from_department') or 'None').strip()
             if not raw_from_dept or raw_from_dept.lower() in ('none', 'n/a', '-', ''):
                 canon_from_dept = 'None'
             else:
-                canon_from_dept = {
-                    'online': 'Online',
-                    'offline': 'Offline',
-                    'packing': 'Packing',
-                    'none': 'None'
-                }.get(raw_from_dept.lower())
+                from_lower = raw_from_dept.lower()
+                canon_from_dept = valid_from_depts.get(from_lower)
                 if not canon_from_dept:
                     errors.append(f"From Department must be one of: Online, Offline, Packing, None (received '{raw_from_dept}').")
-            row_dict['from_department'] = canon_from_dept or 'None'
+                    canon_from_dept = 'None'
+            row_dict['from_department'] = canon_from_dept
 
-            # 7. Priority
-            raw_prio = str(row_dict.get('priority') or 'Medium').strip().capitalize()
-            if raw_prio not in ('Low', 'Medium', 'High', 'Urgent'):
-                raw_prio = 'Medium'
-            row_dict['priority'] = raw_prio
+            # ---------------------------------------------------------
+            # 7. Priority (Case-Insensitive Standard Formatting)
+            # ---------------------------------------------------------
+            raw_prio = str(row_dict.get('priority') or 'Medium').strip().lower()
+            canon_prio = valid_priorities.get(raw_prio, 'Medium')
+            row_dict['priority'] = canon_prio
 
-            # 8. Status
-            raw_status = str(row_dict.get('status') or 'Submitted').strip()
-            valid_statuses = {'submitted': 'Submitted', 'under review': 'Under Review', 'in progress': 'In Progress', 'resolved': 'Resolved', 'closed': 'Closed'}
-            canon_status = valid_statuses.get(raw_status.lower(), 'Submitted')
+            # ---------------------------------------------------------
+            # 8. Status (Case-Insensitive Standard Formatting)
+            # ---------------------------------------------------------
+            raw_status = str(row_dict.get('status') or 'Submitted').strip().lower()
+            canon_status = valid_statuses.get(raw_status, 'Submitted')
             row_dict['status'] = canon_status
 
-            # 9. Invoice No.
+            # ---------------------------------------------------------
+            # 9. Salesperson Name (Case-Insensitive Spelling Validation against Master Data)
+            # ---------------------------------------------------------
+            raw_sp = str(row_dict.get('salesperson_name') or '').strip()
+            if raw_sp:
+                sp_lower = re.sub(r'\s+', ' ', raw_sp).lower()
+                if sp_lower in active_salespersons_map:
+                    canon_sp = active_salespersons_map[sp_lower]
+                else:
+                    errors.append(f"Salesperson '{raw_sp}' does not match any active salesperson in master data.")
+                    canon_sp = raw_sp.title()
+            else:
+                canon_sp = ''
+            row_dict['salesperson_name'] = canon_sp
+
+            # ---------------------------------------------------------
+            # 10. Invoice No.
+            # ---------------------------------------------------------
             c_inv = str(row_dict.get('invoice_no') or '').strip()
             row_dict['invoice_no'] = c_inv
 
-            # 10. Dates: Closing Date & GR Expected Date
+            # ---------------------------------------------------------
+            # 11. Details, Remarks & Other Text Fields
+            # ---------------------------------------------------------
+            c_details = str(row_dict.get('complain_details') or '').strip()
+            row_dict['complain_details'] = c_details
+
+            c_remarks = str(row_dict.get('remarks') or '').strip()
+            row_dict['remarks'] = c_remarks
+
+            # ---------------------------------------------------------
+            # 12. Dates: Closing Date & GR Expected Date
+            # ---------------------------------------------------------
             c_closing = cls._parse_date(row_dict.get('closing_date')) if row_dict.get('closing_date') else ''
             if row_dict.get('closing_date') and not c_closing:
                 errors.append(f"Closing Date '{row_dict.get('closing_date')}' is invalid (use YYYY-MM-DD).")
@@ -577,7 +740,9 @@ class ExcelImportService:
                 errors.append(f"GR Expected Date '{row_dict.get('gr_expected_date')}' is invalid (use YYYY-MM-DD).")
             row_dict['gr_expected_date'] = c_gr_date or ''
 
-            # 11. GR Amount
+            # ---------------------------------------------------------
+            # 13. GR Amount
+            # ---------------------------------------------------------
             raw_gr = str(row_dict.get('gr_amount') or '').strip()
             if raw_gr:
                 try:
@@ -590,50 +755,57 @@ class ExcelImportService:
             else:
                 row_dict['gr_amount'] = ''
 
-            # 12. Duplicate Check
-            if c_mob and c_inv:
-                inv_mob_key = f"inv:{c_inv.lower()}|mob:{c_mob}"
-                if inv_mob_key in in_file_duplicate_keys:
-                    errors.append(f"Duplicate row in uploaded file (Invoice '{c_inv}' and Mobile '{c_mob}' already present).")
-                elif inv_mob_key in existing_complaint_keys:
-                    errors.append(f"Complaint with Invoice '{c_inv}' and Mobile '{c_mob}' already exists in database.")
+            # ---------------------------------------------------------
+            # 14. TRUE DUPLICATE PROTECTION (NO CUSTOMER / MOBILE BLOCKING!)
+            # ---------------------------------------------------------
+            # Check explicit Record ID or Complaint ID if provided
+            row_record_id = str(row_dict.get('record_id') or row_dict.get('complaint_id') or '').strip()
+            if row_record_id:
+                rec_upper = row_record_id.upper()
+                if rec_upper in in_file_record_ids:
+                    errors.append(f"Duplicate Record ID '{row_record_id}' in uploaded file (Row {r_num}).")
+                elif rec_upper in existing_complaint_ids or rec_upper in existing_record_ids:
+                    errors.append(f"Duplicate complaint: Record ID '{row_record_id}' already exists in database (cannot be re-imported).")
                 else:
-                    in_file_duplicate_keys.add(inv_mob_key)
-
-            if c_mob and c_date and c_type:
-                mob_date_key = f"mob:{c_mob}|date:{c_date}|type:{c_type.lower()}"
-                if mob_date_key in in_file_duplicate_keys:
-                    errors.append(f"Duplicate complaint in uploaded file (same mobile, date, and issue type).")
-                elif mob_date_key in existing_complaint_keys:
-                    errors.append(f"Matching complaint already exists in database.")
+                    in_file_record_ids.add(rec_upper)
+            else:
+                # When no explicit record_id is supplied:
+                # Detect exact identical complaint re-imports without customer name or mobile blocking.
+                # A customer can have unlimited complaints; but exact identical complaint payload is protected.
+                exact_fingerprint = f"{c_inv.lower()}|{canon_dept.lower()}|{canon_from_dept.lower()}|{c_type.lower()}|{c_date}|{c_details.lower()}|{c_remarks.lower()}|{row_dict['gr_amount']}"
+                if exact_fingerprint in in_file_fingerprints:
+                    errors.append("Duplicate complaint in uploaded file: Identical complaint record already present in this batch.")
+                elif exact_fingerprint in existing_record_fingerprints:
+                    errors.append("Duplicate complaint: Exact matching complaint already exists in database (accidental re-import blocked).")
                 else:
-                    in_file_duplicate_keys.add(mob_date_key)
+                    in_file_fingerprints.add(exact_fingerprint)
 
             # Clean remaining strings
-            for k in ('category', 'vendor_name', 'salesperson_name', 'handled_by', 'remarks', 'complain_details', 'solution_given'):
+            for k in ('category', 'vendor_name', 'handled_by', 'solution_given'):
                 row_dict[k] = str(row_dict.get(k) or '').strip()
 
             row_summary = {
                 'row_number': r_num,
-                'customer_name': c_name,
-                'customer_mobile': c_mob or str(raw_mob or ''),
-                'complain_date': c_date or str(raw_date or ''),
+                'customer_name': c_name_display,
+                'customer_mobile': row_dict['customer_mobile'],
+                'complain_date': row_dict['complain_date'],
                 'complain_types': c_type,
-                'department_name': row_dict.get('department_name') or raw_dept,
-                'from_department': row_dict.get('from_department') or raw_from_dept,
+                'department_name': canon_dept,
+                'from_department': canon_from_dept,
                 'invoice_no': c_inv,
-                'priority': row_dict.get('priority', 'Medium'),
-                'status': row_dict.get('status', 'Submitted'),
+                'priority': canon_prio,
+                'status': canon_status,
                 'category': row_dict.get('category', ''),
                 'vendor_name': row_dict.get('vendor_name', ''),
-                'salesperson_name': row_dict.get('salesperson_name', ''),
+                'salesperson_name': canon_sp,
                 'handled_by': row_dict.get('handled_by', ''),
-                'remarks': row_dict.get('remarks', ''),
-                'complain_details': row_dict.get('complain_details', ''),
+                'remarks': c_remarks,
+                'complain_details': c_details,
                 'closing_date': row_dict.get('closing_date', ''),
                 'solution_given': row_dict.get('solution_given', ''),
                 'gr_amount': row_dict.get('gr_amount', ''),
                 'gr_expected_date': row_dict.get('gr_expected_date', ''),
+                'record_id': row_record_id,
                 'errors': errors
             }
 
@@ -703,6 +875,7 @@ class ExcelImportService:
         for r_idx, row in enumerate(invalid_rows, start=2):
             ws.row_dimensions[r_idx].height = 24
             err_text = chr(8226) + ' ' + (' \n' + chr(8226) + ' ').join(row.get('errors', []))
+
             row_data = [
                 row.get('row_number', r_idx),
                 err_text,
@@ -724,7 +897,8 @@ class ExcelImportService:
                 row.get('closing_date', ''),
                 row.get('solution_given', ''),
                 row.get('gr_amount', ''),
-                row.get('gr_expected_date', '')
+                row.get('gr_expected_date', ''),
+                row.get('record_id', '')
             ]
 
             ws.append(row_data)
@@ -740,17 +914,12 @@ class ExcelImportService:
                 else:
                     cell.font = data_font
 
-        # Auto-adjust column widths
-        for col in ws.columns:
-            max_len = 0
-            col_letter = get_column_letter(col[0].column)
-            for cell in col:
-                val_str = str(cell.value or '')
-                if '\n' in val_str:
-                    val_str = max(val_str.split('\n'), key=len)
-                max_len = max(max_len, len(val_str))
-            ws.column_dimensions[col_letter].width = min(max(max_len + 4, 14), 50)
-        ws.column_dimensions['B'].width = 45 # Error Reasons column
+        # Auto-fit column widths
+        ws.column_dimensions['A'].width = 8
+        ws.column_dimensions['B'].width = 45
+        for col_idx in range(3, len(headers) + 1):
+            letter = get_column_letter(col_idx)
+            ws.column_dimensions[letter].width = 18
 
         buf = io.BytesIO()
         wb.save(buf)

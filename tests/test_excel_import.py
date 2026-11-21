@@ -5,16 +5,25 @@ AJIT ZONE PVT. LTD. Complaint Management System.
 Covers:
 1. Template generation:
    - File format (.xlsx)
-   - Canonical 19 columns with required column indicators
+   - Canonical columns with required column indicators
    - Data validation rules (From Dept, Priority, Status, Department Name)
    - Instructions & Reference worksheet
 2. Validation engine:
-   - Mandatory field validation
-   - 10-digit mobile number normalization & validation
-   - Date formats parsing & normalization
-   - Dropdown options validation (From Department: Online, Offline, Packing, None)
-   - In-batch duplicate collision detection
-   - Database duplicate record detection
+   - No Customer-Based Duplicate Blocking:
+     - Same customer with multiple complaints on same date
+     - Existing customer in database lodging new complaints
+   - Case-Insensitive Matching & Spelling Validation:
+     - Customer names in UPPERCASE, lowercase, Title Case (e.g. RAHUL SHARMA, Rahul Sharma, rahul sharma)
+     - Master data values accepted regardless of case (KURTI, ONLINE, DAMAGE, KOMAL VAISHNAV)
+     - Misspelled master entries (e.g. kurtiii, onlieee, invalid_type) rejected
+   - Display Formatting:
+     - Automatic standardization of display casing (e.g. RAHUL SHARMA -> Rahul Sharma)
+     - Standard canonical master casing (e.g. dAmAgE -> Damage)
+   - True Duplicate Protection:
+     - Exact identical complaint row re-import blocked
+     - Explicit Record ID / Complaint ID duplicate in file or DB blocked
+     - Distinct complaints for the same customer NOT blocked
+   - Mandatory field validation & 10-digit mobile number normalization
    - RBAC department authorization scoping per row
    - Empty sheet rejection
 3. End-to-end API Endpoints:
@@ -146,33 +155,200 @@ class TestExcelImportModule(unittest.TestCase):
     # 2. VALIDATION ENGINE UNIT TESTS
     # =========================================================================
 
-    def test_parse_and_validate_valid_rows(self):
-        """Verify valid rows are accepted and returned with valid_count and preview_token."""
+    def test_no_customer_duplicate_blocking_unlimited_complaints(self):
+        """
+        Verify rule 1: The same customer can have unlimited complaints,
+        even multiple complaints on the same date. Customer name / mobile never causes rejection.
+        """
+        # Customer already exists in database
+        MockSheetsDB.create_complaint({
+            'Customer Name': 'RAHUL SHARMA',
+            'Customer Mobile No.': '9876543210',
+            'Invoice No.': 'INV-PREV-01',
+            'Complain Date': '2026-11-20',
+            'Complain Types': 'Damage',
+            'Department Name': 'Kurti',
+            'From Department': 'Online'
+        }, self.super_admin_user)
+
+        # Upload 3 new complaints for the SAME customer on the SAME date with different invoices/issues
         rows = [
             [
-                'Rajesh Sharma', '9876543210', '2026-11-20', 'Quality Issue',
-                'General', 'Online', 'INV-1001', 'High', 'Submitted',
-                'Defect', 'Vendor A', 'Sales Rep 1', 'Unassigned', 'Note 1',
-                'Defective stitching', '', '', '0', ''
+                'Rahul Sharma', '9876543210', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-NEW-01', 'High', 'Submitted',
+                'Apparel', '', 'Nikita Vaishnav', '', '', 'First complaint on new invoice', '', '', '', ''
             ],
             [
-                'Anita Gupta', '+91 9123456789', '2026-11-19', 'Delivery Delay',
-                'General', 'Packing', 'INV-1002', 'Medium', 'Submitted',
-                'Logistics', 'Vendor B', 'Sales Rep 2', 'Unassigned', 'Note 2',
-                'Delayed 3 days', '', '', '0', ''
+                'rahul sharma', '9876543210', '2026-11-20', 'Quality',
+                'Kurti', 'Online', 'INV-NEW-02', 'Medium', 'Submitted',
+                'Apparel', '', 'Nikita Vaishnav', '', '', 'Second complaint on different invoice', '', '', '', ''
+            ],
+            [
+                'RAHUL SHARMA', '+91 98765 43210', '2026-11-20', 'Wrong Product',
+                'Saree', 'Offline', 'INV-NEW-03', 'Low', 'Submitted',
+                'Apparel', '', 'Komal Vaishnav', '', '', 'Third complaint in different department', '', '', '', ''
             ]
         ]
         stream = create_test_excel_file(rows)
         result = ExcelImportService.parse_and_validate(stream, self.super_admin_user, MockSheetsDB)
 
-        self.assertEqual(result['total_rows'], 2)
-        self.assertEqual(result['valid_count'], 2)
+        # ALL 3 rows must be accepted! 0 rejected!
+        self.assertEqual(result['total_rows'], 3)
+        self.assertEqual(result['valid_count'], 3)
         self.assertEqual(result['invalid_count'], 0)
-        self.assertTrue(bool(result['preview_token']))
-        self.assertEqual(result['valid_rows'][0]['customer_name'], 'Rajesh Sharma')
-        self.assertEqual(result['valid_rows'][0]['customer_mobile'], '9876543210')
-        self.assertEqual(result['valid_rows'][1]['customer_mobile'], '9123456789')
-        self.assertEqual(result['valid_rows'][1]['from_department'], 'Packing')
+
+    def test_case_insensitive_matching_and_display_formatting(self):
+        """
+        Verify rule 2, 3, 4: Case-insensitive matching accepts uppercase, lowercase,
+        and mixed case, and standardizes display formatting to canonical casing.
+        """
+        rows = [
+            [
+                # UPPERCASE inputs
+                'PRIYA PATEL', '9876500001', '2026-11-20', 'DAMAGE',
+                'KURTI', 'ONLINE', 'INV-UPPER', 'URGENT', 'SUBMITTED',
+                '', '', 'NIKITA VAISHNAV'
+            ],
+            [
+                # lowercase inputs
+                'amit verma', '9876500002', '2026-11-20', 'wrong product',
+                'saree', 'packing', 'inv-lower', 'low', 'in progress',
+                '', '', 'komal vaishnav'
+            ],
+            [
+                # mixed / irregular case
+                'sNeHa jOsHi', '9876500003', '2026-11-20', 'bIlTy',
+                'dReSs mAtErIaL', 'oFfLiNe', 'InV-MiX', 'MeDiUm', 'UnDeR ReViEw',
+                '', '', 'gOpAl rAm dOdVaDiYa'
+            ]
+        ]
+        stream = create_test_excel_file(rows)
+        result = ExcelImportService.parse_and_validate(stream, self.super_admin_user, MockSheetsDB)
+
+        self.assertEqual(result['valid_count'], 3)
+        self.assertEqual(result['invalid_count'], 0)
+
+        row1 = result['valid_rows'][0]
+        self.assertEqual(row1['customer_name'], 'Priya Patel') # Title Case display formatting
+        self.assertEqual(row1['complain_types'], 'Damage') # Standard master casing
+        self.assertEqual(row1['department_name'], 'Kurti') # Standard master casing
+        self.assertEqual(row1['from_department'], 'Online') # Standard canonical casing
+        self.assertEqual(row1['salesperson_name'], 'Nikita Vaishnav') # Canonical salesperson casing
+        self.assertEqual(row1['priority'], 'Urgent')
+        self.assertEqual(row1['status'], 'Submitted')
+
+        row2 = result['valid_rows'][1]
+        self.assertEqual(row2['customer_name'], 'Amit Verma')
+        self.assertEqual(row2['complain_types'], 'Wrong Product')
+        self.assertEqual(row2['department_name'], 'Saree')
+        self.assertEqual(row2['from_department'], 'Packing')
+        self.assertEqual(row2['salesperson_name'], 'Komal Vaishnav')
+        self.assertEqual(row2['priority'], 'Low')
+        self.assertEqual(row2['status'], 'In Progress')
+
+        row3 = result['valid_rows'][2]
+        self.assertEqual(row3['customer_name'], 'sNeHa jOsHi') # Preserved mixed casing
+        self.assertEqual(row3['complain_types'], 'Bilty')
+        self.assertEqual(row3['department_name'], 'Dress Material')
+        self.assertEqual(row3['from_department'], 'Offline')
+        self.assertEqual(row3['salesperson_name'], 'Gopal Ram Dodvadiya')
+
+    def test_spelling_validation_rejects_typos_in_master_data(self):
+        """
+        Verify rule 3: While letter casing is ignored, actual spelling errors
+        in master entities (departments, from department, complaint types) are caught.
+        """
+        rows = [
+            # Typo in department: 'Kurtiii' instead of 'Kurti'
+            ['Valid User', '9876543210', '2026-11-20', 'Damage', 'Kurtiii', 'Online', 'INV-1'],
+            # Typo in From Department: 'Onlieee' instead of 'Online'
+            ['Valid User', '9876543211', '2026-11-20', 'Damage', 'Kurti', 'Onlieee', 'INV-2'],
+            # Typo in Complain Types: 'UnknownIssueXYZ'
+            ['Valid User', '9876543212', '2026-11-20', 'UnknownIssueXYZ', 'Kurti', 'Online', 'INV-3']
+        ]
+        stream = create_test_excel_file(rows)
+        result = ExcelImportService.parse_and_validate(stream, self.super_admin_user, MockSheetsDB)
+
+        self.assertEqual(result['valid_count'], 0)
+        self.assertEqual(result['invalid_count'], 3)
+
+        err1 = ' '.join(result['invalid_rows'][0]['errors'])
+        self.assertIn("Department 'Kurtiii' is not an active company department", err1)
+
+        err2 = ' '.join(result['invalid_rows'][1]['errors'])
+        self.assertIn("From Department must be one of: Online, Offline, Packing, None", err2)
+
+        err3 = ' '.join(result['invalid_rows'][2]['errors'])
+        self.assertIn("Complain Type 'UnknownIssueXYZ' does not match any active complaint type", err3)
+
+    def test_true_duplicate_protection_exact_reimport_and_record_id(self):
+        """
+        Verify rule 5: Prevents accidental re-import of exact identical complaints,
+        while never using customer name or mobile number for duplicate blocking.
+        """
+        # Seed an existing complaint in DB
+        MockSheetsDB.create_complaint({
+            'Complaint ID': 'CMP-EXISTING-01',
+            'Customer Name': 'Existing Client',
+            'Customer Mobile No.': '9876500001',
+            'Invoice No.': 'INV-EX-999',
+            'Complain Date': '2026-11-20',
+            'Complain Types': 'Damage',
+            'Department Name': 'Kurti',
+            'From Department': 'Online',
+            'Complain Details': 'Identical torn seam',
+            'Remarks': 'Inspection pending',
+            'GR Amount': '500.00'
+        }, self.super_admin_user)
+
+        rows = [
+            # 1. Exact identical complaint as in database (accidental re-import of exact row)
+            [
+                'Different Customer Name Allowed', '9999999999', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-EX-999', 'High', 'Submitted',
+                '', '', '', '', 'Inspection pending', 'Identical torn seam', '', '', '500.00', ''
+            ],
+            # 2. Fresh valid complaint
+            [
+                'Customer A', '9876500002', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-FRESH-01', 'High', 'Submitted',
+                '', '', '', '', 'New remark', 'New detail', '', '', '200.00', ''
+            ],
+            # 3. Duplicate row in same uploaded file (accidental duplicate of row 2)
+            [
+                'Customer A', '9876500002', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-FRESH-01', 'High', 'Submitted',
+                '', '', '', '', 'New remark', 'New detail', '', '', '200.00', ''
+            ],
+            # 4. Row with duplicate explicit Record/Complaint ID in file
+            [
+                'Customer B', '9876500003', '2026-11-20', 'Quality',
+                'Saree', 'Offline', 'INV-REC-01', 'Medium', 'Submitted',
+                '', '', '', '', '', '', '', '', '', '', 'REC-REPEAT-01'
+            ],
+            # 5. Row with same explicit Record ID
+            [
+                'Customer C', '9876500004', '2026-11-20', 'Wrong Product',
+                'Saree', 'Offline', 'INV-REC-02', 'Medium', 'Submitted',
+                '', '', '', '', '', '', '', '', '', '', 'REC-REPEAT-01'
+            ]
+        ]
+        stream = create_test_excel_file(rows)
+        result = ExcelImportService.parse_and_validate(stream, self.super_admin_user, MockSheetsDB)
+
+        # Row 2 and Row 4 are valid (Row 4 is first occurrence of REC-REPEAT-01)
+        self.assertEqual(result['valid_count'], 2)
+        # Rows 1, 3, 5 are rejected
+        self.assertEqual(result['invalid_count'], 3)
+
+        err_row1 = ' '.join(result['invalid_rows'][0]['errors'])
+        self.assertIn("Exact matching complaint already exists in database", err_row1)
+
+        err_row3 = ' '.join(result['invalid_rows'][1]['errors'])
+        self.assertIn("Identical complaint record already present in this batch", err_row3)
+
+        err_row5 = ' '.join(result['invalid_rows'][2]['errors'])
+        self.assertIn("Duplicate Record ID 'REC-REPEAT-01' in uploaded file", err_row5)
 
     def test_parse_and_validate_mandatory_fields(self):
         """Verify missing required fields (Customer, Mobile, Date, Department) are rejected."""
@@ -202,13 +378,13 @@ class TestExcelImportModule(unittest.TestCase):
         """Verify 10-digit mobile number variations and rejection of invalid lengths."""
         rows = [
             # Row 1: Valid formatted mobile with +91 and spaces
-            ['User One', '+91 98765 43210', '2026-11-20', 'Type A', 'General', 'Online', 'INV-A'],
+            ['User One', '+91 98765 43210', '2026-11-20', 'Damage', 'Kurti', 'Online', 'INV-A'],
             # Row 2: Invalid 8-digit mobile
-            ['User Two', '98765432', '2026-11-20', 'Type A', 'General', 'Offline', 'INV-B'],
+            ['User Two', '98765432', '2026-11-20', 'Damage', 'Kurti', 'Offline', 'INV-B'],
             # Row 3: Invalid 12-digit mobile without country code
-            ['User Three', '987654321000', '2026-11-20', 'Type A', 'General', 'None', 'INV-C'],
+            ['User Three', '987654321000', '2026-11-20', 'Damage', 'Kurti', 'None', 'INV-C'],
             # Row 4: Non-numeric mobile
-            ['User Four', 'INVALID-MOB', '2026-11-20', 'Type A', 'General', 'Packing', 'INV-D']
+            ['User Four', 'INVALID-MOB', '2026-11-20', 'Damage', 'Kurti', 'Packing', 'INV-D']
         ]
         stream = create_test_excel_file(rows)
         result = ExcelImportService.parse_and_validate(stream, self.super_admin_user, MockSheetsDB)
@@ -221,62 +397,14 @@ class TestExcelImportModule(unittest.TestCase):
             err_text = ' '.join(inv_row['errors'])
             self.assertIn('Customer Mobile No.', err_text)
 
-    def test_parse_and_validate_from_department(self):
-        """Verify From Department only accepts Online, Offline, Packing, None."""
-        rows = [
-            ['Valid Online', '9876543210', '2026-11-20', 'Type', 'General', 'Online', 'INV-1'],
-            ['Valid Offline', '9876543211', '2026-11-20', 'Type', 'General', 'Offline', 'INV-2'],
-            ['Valid Packing', '9876543212', '2026-11-20', 'Type', 'General', 'Packing', 'INV-3'],
-            ['Valid None', '9876543213', '2026-11-20', 'Type', 'General', 'None', 'INV-4'],
-            ['Invalid Dept', '9876543214', '2026-11-20', 'Type', 'General', 'RandomDept', 'INV-5']
-        ]
-        stream = create_test_excel_file(rows)
-        result = ExcelImportService.parse_and_validate(stream, self.super_admin_user, MockSheetsDB)
-
-        self.assertEqual(result['valid_count'], 4)
-        self.assertEqual(result['invalid_count'], 1)
-        self.assertIn("From Department must be one of: Online, Offline, Packing, None", ' '.join(result['invalid_rows'][0]['errors']))
-
-    def test_duplicate_detection_internal_and_external(self):
-        """Verify internal in-batch collision and external database duplicate detection."""
-        # 1. Existing complaint in DB
-        MockSheetsDB.create_complaint({
-            'Customer Name': 'Existing Client',
-            'Customer Mobile No.': '9876500001',
-            'Invoice No.': 'INV-EX-999',
-            'Complain Date': '2026-11-15',
-            'Complain Types': 'Fabric Defect',
-            'Department Name': 'General',
-            'From Department': 'Online'
-        }, self.super_admin_user)
-
-        rows = [
-            # Duplicate with database (Same Invoice No + Mobile)
-            ['Existing Client Dup', '9876500001', '2026-11-20', 'Fabric Defect', 'General', 'Online', 'INV-EX-999'],
-            # Fresh new record
-            ['Fresh Customer', '9876500002', '2026-11-20', 'Color Issue', 'General', 'Online', 'INV-NEW-001'],
-            # Internal duplicate of the fresh new record in same batch
-            ['Fresh Customer Again', '9876500002', '2026-11-20', 'Color Issue', 'General', 'Online', 'INV-NEW-001']
-        ]
-        stream = create_test_excel_file(rows)
-        result = ExcelImportService.parse_and_validate(stream, self.super_admin_user, MockSheetsDB)
-
-        self.assertEqual(result['valid_count'], 1)
-        self.assertEqual(result['invalid_count'], 2)
-
-        # Check DB duplicate error reason
-        self.assertIn("already exists in database", ' '.join(result['invalid_rows'][0]['errors']))
-        # Check in-batch collision error reason
-        self.assertIn("Duplicate complaint in uploaded file", ' '.join(result['invalid_rows'][1]['errors']))
-
     def test_rbac_department_scoping(self):
         """Verify staff user cannot upload records for unauthorized departments."""
         # staff_user is restricted to 'Online Sales'
         rows = [
             # Authorized row
-            ['Customer One', '9876543210', '2026-11-20', 'Defect', 'Online Sales', 'Online', 'INV-OK-1'],
+            ['Customer One', '9876543210', '2026-11-20', 'Damage', 'Online Sales', 'Online', 'INV-OK-1'],
             # Unauthorized row (General department)
-            ['Customer Two', '9876543211', '2026-11-20', 'Defect', 'General', 'Offline', 'INV-BLOCK-2']
+            ['Customer Two', '9876543211', '2026-11-20', 'Damage', 'General', 'Offline', 'INV-BLOCK-2']
         ]
         stream = create_test_excel_file(rows)
         result = ExcelImportService.parse_and_validate(stream, self.staff_user, MockSheetsDB)
@@ -320,10 +448,10 @@ class TestExcelImportModule(unittest.TestCase):
             sess['user'] = self.super_admin_user
 
         rows = [
-            # Valid row
-            ['Mohan Lal', '9876511111', '2026-11-20', 'Stitching Issue', 'General', 'Online', 'INV-E2E-1', 'High'],
+            # Valid row (UPPERCASE customer name and lowercase dropdown values)
+            ['MOHAN LAL', '9876511111', '2026-11-20', 'damage', 'kurti', 'online', 'INV-E2E-1', 'high', 'submitted', '', '', 'nikita vaishnav'],
             # Invalid row (missing mobile & bad from dept)
-            ['Suresh Kumar', 'INVALID', '2026-11-20', 'Color Bleed', 'General', 'BadDept', 'INV-E2E-2']
+            ['Suresh Kumar', 'INVALID', '2026-11-20', 'Damage', 'Kurti', 'BadDept', 'INV-E2E-2']
         ]
         excel_stream = create_test_excel_file(rows)
 
@@ -340,6 +468,13 @@ class TestExcelImportModule(unittest.TestCase):
         self.assertEqual(data['data']['total_rows'], 2)
         self.assertEqual(data['data']['valid_count'], 1)
         self.assertEqual(data['data']['invalid_count'], 1)
+
+        # Verify display formatting on valid row
+        valid_row = data['data']['valid_rows'][0]
+        self.assertEqual(valid_row['customer_name'], 'Mohan Lal')
+        self.assertEqual(valid_row['department_name'], 'Kurti')
+        self.assertEqual(valid_row['from_department'], 'Online')
+        self.assertEqual(valid_row['salesperson_name'], 'Nikita Vaishnav')
 
         # 2. GET /api/complaints/import/error-report
         err_res = self.client.get(f'/api/complaints/import/error-report?preview_token={preview_token}')
@@ -371,6 +506,8 @@ class TestExcelImportModule(unittest.TestCase):
         self.assertEqual(len(imported), 1)
         self.assertEqual(imported[0]['From Department'], 'Online')
         self.assertEqual(imported[0]['Customer Mobile No.'], '9876511111')
+        self.assertEqual(imported[0]['Department Name'], 'Kurti')
+        self.assertEqual(imported[0]['Salesperson Name'], 'Nikita Vaishnav')
 
         # Verify audit log was recorded
         audit_logs = MockSheetsDB._store['Audit_Logs']

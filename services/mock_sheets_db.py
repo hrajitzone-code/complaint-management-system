@@ -25,6 +25,16 @@ DEFAULT_DEPARTMENTS = [
 ]
 
 class MockSheetsDB:
+
+    @classmethod
+    def get_active_complaint_types(cls):
+        """Returns list of active complaint types."""
+        return [t for t in cls.get_all_complaint_types() if str(t.get('Is Active', 'TRUE')).upper() in ('TRUE', '1', 'YES')]
+
+    @classmethod
+    def get_active_salespersons(cls):
+        """Returns list of active salespersons."""
+        return [s for s in cls.get_all_salespersons() if str(s.get('Is Active', 'TRUE')).upper() in ('TRUE', '1', 'YES')]
     @classmethod
     def generate_complaint_id(cls):
         """Generates a unique complaint ID."""
