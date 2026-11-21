@@ -557,7 +557,7 @@
                         </div>
 
                         <!-- Filter Controls Bar -->
-                        <div class="table-actions" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; padding: 0 4px;">
+                        <div class="table-actions" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; padding: 0 4px;">
                             <div style="flex: 1 1 240px;">
                                 <input type="text" id="my-search-input" class="search-input" style="width: 100%;" placeholder="Search ID, Customer, Mobile, Invoice, Issue, Remarks...">
                             </div>
@@ -621,6 +621,20 @@
                             </div>
                         </div>
 
+                        <!-- Live Record Counts Bar for My Complaints -->
+                        <div class="live-counts-bar-wrapper" style="margin: 0 4px 14px 4px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 16px;">
+                            <div class="live-record-counts-text" id="my-live-counts-display" style="font-size: 0.9rem; color: #334155; font-weight: 500;">
+                                Total Records: <strong id="my-count-total" style="color: #0f172a; font-weight: 700;">0</strong>
+                                <span style="color: #94a3b8; margin: 0 8px;">|</span>
+                                Filtered Records: <strong id="my-count-filtered" style="color: #2563eb; font-weight: 700;">0</strong>
+                                <span style="color: #94a3b8; margin: 0 8px;">|</span>
+                                <span id="my-count-showing" style="color: #475569; font-weight: 600;">Showing 0–0 of 0</span>
+                            </div>
+                            <div style="font-size: 0.82rem; color: #64748b; font-weight: 500;">
+                                ⚡ Live executive filter active
+                            </div>
+                        </div>
+
                         <!-- Data Table Container -->
                         <div class="table-responsive">
                             <table class="data-table">
@@ -648,7 +662,7 @@
                         <div class="table-pagination-bar" id="my-pagination-bar" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 4px 4px; margin-top: 8px; flex-wrap: wrap; gap: 8px;">
                             <div style="display: flex; align-items: center; gap: 12px;">
                                 <div class="pagination-info text-muted" id="my-pagination-info" style="font-size: 0.85rem;">
-                                    Showing 0 to 0 of 0 complaints
+                                    Total Records: <strong id="my-bottom-count-total">0</strong> | Filtered Records: <strong id="my-bottom-count-filtered">0</strong> | <span id="my-bottom-count-showing">Showing 0–0 of 0</span>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem;" class="text-muted">
                                     <label for="my-page-size">Per page:</label>
@@ -705,6 +719,28 @@
                                 </select>
                             </div>
                         </div>
+
+                        <!-- Live Record Counts Bar for Manage Complaints -->
+                        <div class="live-counts-bar-wrapper" style="margin: 0 0 14px 0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 16px;">
+                            <div class="live-record-counts-text" id="manage-live-counts-display" style="font-size: 0.9rem; color: #334155; font-weight: 500;">
+                                Total Records: <strong id="manage-count-total" style="color: #0f172a; font-weight: 700;">0</strong>
+                                <span style="color: #94a3b8; margin: 0 8px;">|</span>
+                                Filtered Records: <strong id="manage-count-filtered" style="color: #2563eb; font-weight: 700;">0</strong>
+                                <span style="color: #94a3b8; margin: 0 8px;">|</span>
+                                <span id="manage-count-showing" style="color: #475569; font-weight: 600;">Showing 0–0 of 0</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label for="manage-page-size" style="font-size: 0.82rem; color: #64748b; margin: 0;">Per page:</label>
+                                <select id="manage-page-size" class="filter-select" onchange="handleManagePageSizeChange(event)" style="padding: 2px 8px; font-size: 0.82rem; height: auto;">
+                                    <option value="10">10</option>
+                                    <option value="25" selected>25</option>
+                                    <option value="50">50</option>
+                                    <option value="100">100</option>
+                                    <option value="all">All</option>
+                                </select>
+                            </div>
+                        </div>
+
                         <div class="table-responsive">
                             <table class="data-table">
                                 <thead>
@@ -725,6 +761,16 @@
                                     <tr><td colspan="10" class="text-center py-4 text-muted">Loading complaints...</td></tr>
                                 </tbody>
                             </table>
+                        </div>
+
+                        <!-- Table Pagination Bar for Manage Complaints -->
+                        <div class="table-pagination-bar" id="manage-pagination-bar" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 4px 4px; margin-top: 8px; flex-wrap: wrap; gap: 8px;">
+                            <div class="pagination-info text-muted" id="manage-pagination-info" style="font-size: 0.85rem;">
+                                Total Records: <strong id="manage-bottom-count-total">0</strong> | Filtered Records: <strong id="manage-bottom-count-filtered">0</strong> | <span id="manage-bottom-count-showing">Showing 0–0 of 0</span>
+                            </div>
+                            <div class="pagination-buttons" id="manage-pagination-controls" style="display: flex; gap: 4px;">
+                                <!-- Dynamically generated pagination pills -->
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -2683,12 +2729,17 @@
         </div>
     </div>
 
-        <!-- BULK EXCEL IMPORT & PREVIEW MODAL -->
+        <!-- BULK EXCEL IMPORT & EDITABLE PREVIEW MODAL -->
     <div id="excel-import-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true">
-        <div class="modal-dialog modal-lg" style="max-width: 980px; width: 95%;">
-            <div class="modal-header">
+        <!-- Master Datalists for Auto-suggestion & Validation in Editable Table -->
+        <datalist id="preview-dept-datalist"></datalist>
+        <datalist id="preview-type-datalist"></datalist>
+        <datalist id="preview-sp-datalist"></datalist>
+
+        <div class="modal-dialog modal-xl" style="max-width: 98vw; width: 98vw; max-height: 96vh; margin: 2vh auto; display: flex; flex-direction: column;">
+            <div class="modal-header" style="padding: 12px 20px;">
                 <div>
-                    <h3 style="display: flex; align-items: center; gap: 8px;">
+                    <h3 style="display: flex; align-items: center; gap: 8px; margin: 0; font-size: 1.2rem;">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2">
                             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                             <polyline points="14 2 14 8 20 8"/>
@@ -2696,16 +2747,16 @@
                             <line x1="8" y1="17" x2="16" y2="17"/>
                             <polyline points="10 9 9 9 8 9"/>
                         </svg>
-                        Bulk Import Complaints (Excel .xlsx)
+                        Bulk Excel Import &amp; Smart Validation Workspace
                     </h3>
-                    <p class="text-muted" style="margin: 4px 0 0 0; font-size: 0.85rem;">
-                        Upload formatted Excel spreadsheet to validate and batch-insert complaints into Google Sheets.
+                    <p class="text-muted" style="margin: 2px 0 0 0; font-size: 0.82rem;">
+                        Smart case-insensitive matching, multi-department support, inline row editing, real-time revalidation, and bulk import into Google Sheets.
                     </p>
                 </div>
                 <button type="button" class="btn-close" onclick="closeExcelImportModal()" aria-label="Close modal">&times;</button>
             </div>
 
-            <div class="modal-body" style="padding: 20px;">
+            <div class="modal-body" style="padding: 16px 20px; overflow-y: auto; flex: 1 1 auto;">
                 <!-- Step 1: Upload Card & Template Download -->
                 <div id="excel-step-upload">
                     <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
@@ -2765,44 +2816,98 @@
                     <div class="spinner" style="width: 44px; height: 44px; margin: 0 auto 16px auto; border-width: 4px; border-top-color: #2563eb;"></div>
                     <h4 style="margin: 0 0 8px 0; color: #1e293b;">Validating Complaints Data</h4>
                     <p class="text-muted" style="margin: 0; font-size: 0.88rem;" id="excel-loading-msg">
-                        Checking mandatory fields, 10-digit mobile numbers, dates, master data, RBAC department access, and duplicate records...
+                        Applying smart case-insensitivity, master alias normalization, mobile and date checks...
                     </p>
                 </div>
 
-                <!-- Step 2: Validation Results & Preview Table -->
+                <!-- Step 2: Validation Results & Editable Preview Table -->
                 <div id="excel-step-preview" style="display: none;">
                     <!-- KPI Metric Counters -->
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px;">
-                        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px;">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 14px;">
+                        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px;">
                             <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; font-weight: 600;">Total Rows Found</div>
-                            <div id="preview-metric-total" style="font-size: 1.6rem; font-weight: 700; color: #1e293b; margin-top: 2px;">0</div>
+                            <div id="preview-metric-total" style="font-size: 1.5rem; font-weight: 700; color: #1e293b; margin-top: 2px;">0</div>
                         </div>
-                        <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px 16px; border-left: 4px solid #16a34a;">
+                        <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 10px 14px; border-left: 4px solid #16a34a;">
                             <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: #166534; font-weight: 600;">Ready to Import</div>
-                            <div id="preview-metric-valid" style="font-size: 1.6rem; font-weight: 700; color: #16a34a; margin-top: 2px;">0</div>
+                            <div id="preview-metric-valid" style="font-size: 1.5rem; font-weight: 700; color: #16a34a; margin-top: 2px;">0</div>
                         </div>
-                        <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 16px; border-left: 4px solid #dc2626;">
+                        <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; border-left: 4px solid #dc2626;">
                             <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: #991b1b; font-weight: 600;">Rejected Rows</div>
-                            <div id="preview-metric-invalid" style="font-size: 1.6rem; font-weight: 700; color: #dc2626; margin-top: 2px;">0</div>
+                            <div id="preview-metric-invalid" style="font-size: 1.5rem; font-weight: 700; color: #dc2626; margin-top: 2px;">0</div>
                         </div>
                     </div>
 
                     <!-- Notice Banners -->
-                    <div id="preview-notice-valid" style="display: none; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; padding: 10px 14px; font-size: 0.85rem; color: #065f46; margin-bottom: 14px;">
-                        &#10004; <strong>Ready for database insertion:</strong> Valid records will be batch-appended to Google Sheets Complaints &amp; Status History. Existing data will not be overwritten or modified.
+                    <div id="preview-notice-valid" style="display: none; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; padding: 8px 12px; font-size: 0.84rem; color: #065f46; margin-bottom: 12px;">
+                        &#10004; <strong>Ready for database insertion:</strong> Valid records can be batch-imported directly to Google Sheets. You can also edit any cell inline below before importing.
                     </div>
-                    <div id="preview-notice-errors" style="display: none; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 6px; padding: 10px 14px; font-size: 0.85rem; color: #9f1239; margin-bottom: 14px;">
-                        &#9888; <strong>Rejected rows detected:</strong> Invalid records cannot be imported. You can download the rejected rows error report below to see exact reasons, fix them, and re-upload.
+                    <div id="preview-notice-errors" style="display: none; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 6px; padding: 8px 12px; font-size: 0.84rem; color: #9f1239; margin-bottom: 12px;">
+                        &#9888; <strong>Inline Correction Available:</strong> Red-highlighted cells contain invalid data. Correct them directly in the table below, then click &ldquo;Revalidate All Rows&rdquo; or click &ldquo;Validate&rdquo; on that row.
                     </div>
 
-                    <!-- Preview Controls (Tabs + Actions) -->
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
-                        <div style="display: flex; gap: 4px; background: #e2e8f0; padding: 3px; border-radius: 6px;">
-                            <button type="button" id="tab-preview-all" class="preview-tab-btn active" onclick="switchPreviewTab('all')">All Rows</button>
-                            <button type="button" id="tab-preview-valid" class="preview-tab-btn" onclick="switchPreviewTab('valid')">Valid Only</button>
-                            <button type="button" id="tab-preview-invalid" class="preview-tab-btn" onclick="switchPreviewTab('invalid')">Rejected Only</button>
+                    <!-- Quick Bulk Actions & Controls Toolbar -->
+                    <div class="preview-toolbar" style="padding: 10px 14px; margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <span style="font-weight: 700; font-size: 0.82rem; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">⚡ Bulk Set:</span>
+                            <div style="display: inline-flex; align-items: center; gap: 5px;">
+                                <label style="font-size: 0.8rem; color: #475569; margin: 0;">From Dept:</label>
+                                <select id="bulk-from-dept-select" class="filter-select" style="padding: 2px 6px; font-size: 0.8rem; height: auto;">
+                                    <option value="Online">Online</option>
+                                    <option value="Offline">Offline</option>
+                                    <option value="Packing">Packing</option>
+                                    <option value="None">None</option>
+                                </select>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="applyBulkField('from_department')" style="padding: 2px 7px; font-size: 0.78rem;">Apply</button>
+                            </div>
+                            <div style="display: inline-flex; align-items: center; gap: 5px;">
+                                <label style="font-size: 0.8rem; color: #475569; margin: 0;">Status:</label>
+                                <select id="bulk-status-select" class="filter-select" style="padding: 2px 6px; font-size: 0.8rem; height: auto;">
+                                    <option value="Submitted">Submitted</option>
+                                    <option value="Under Review">Under Review</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Resolved">Resolved</option>
+                                    <option value="Closed">Closed</option>
+                                </select>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="applyBulkField('status')" style="padding: 2px 7px; font-size: 0.78rem;">Apply</button>
+                            </div>
+                            <div style="display: inline-flex; align-items: center; gap: 5px;">
+                                <label style="font-size: 0.8rem; color: #475569; margin: 0;">Priority:</label>
+                                <select id="bulk-priority-select" class="filter-select" style="padding: 2px 6px; font-size: 0.8rem; height: auto;">
+                                    <option value="Low">Low</option>
+                                    <option value="Medium">Medium</option>
+                                    <option value="High">High</option>
+                                    <option value="Urgent">Urgent</option>
+                                </select>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="applyBulkField('priority')" style="padding: 2px 7px; font-size: 0.78rem;">Apply</button>
+                            </div>
                         </div>
-                        <div style="display: flex; gap: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="revalidateAllPreviewRows()" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 600; font-size: 0.82rem;">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                Revalidate All Rows
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Preview Controls (Tabs + Filters + Pagination) -->
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
+                        <div style="display: flex; gap: 4px; background: #e2e8f0; padding: 3px; border-radius: 6px;">
+                            <button type="button" id="tab-preview-all" class="preview-tab-btn active" onclick="switchPreviewTab('all')">All Rows (<span id="tab-count-all">0</span>)</button>
+                            <button type="button" id="tab-preview-valid" class="preview-tab-btn" onclick="switchPreviewTab('valid')">Ready to Import (<span id="tab-count-valid">0</span>)</button>
+                            <button type="button" id="tab-preview-invalid" class="preview-tab-btn" onclick="switchPreviewTab('invalid')">Rejected (<span id="tab-count-invalid">0</span>)</button>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <input type="text" id="preview-search-input" class="search-input" placeholder="Search preview rows..." oninput="filterPreviewTable()" style="max-width: 240px; padding: 4px 10px; font-size: 0.84rem;">
+                            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; color: #64748b;">
+                                <label for="preview-page-size" style="margin: 0;">Show:</label>
+                                <select id="preview-page-size" class="filter-select" onchange="handlePreviewPageSizeChange(event)" style="padding: 2px 6px; font-size: 0.82rem; height: auto;">
+                                    <option value="25">25</option>
+                                    <option value="50" selected>50</option>
+                                    <option value="100">100</option>
+                                    <option value="all">All (447)</option>
+                                </select>
+                            </div>
                             <button type="button" id="btn-download-error-report" class="btn btn-outline-danger btn-sm" onclick="downloadExcelErrorReport()" style="display: none; align-items: center; gap: 6px; font-size: 0.82rem;">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                                 Download Rejected Rows (.xlsx)
@@ -2810,38 +2915,61 @@
                         </div>
                     </div>
 
-                    <!-- Preview Table -->
-                    <div style="max-height: 340px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 6px;">
-                        <table class="data-table" style="width: 100%; font-size: 0.84rem;">
-                            <thead style="position: sticky; top: 0; background: #f8fafc; z-index: 1;">
+                    <!-- Editable Preview Table Container -->
+                    <div class="preview-table-container">
+                        <table class="data-table" style="width: 100%; font-size: 0.82rem; border-collapse: separate; border-spacing: 0;">
+                            <thead style="position: sticky; top: 0; background: #f8fafc; z-index: 10; box-shadow: 0 1px 2px rgba(0,0,0,0.06);">
                                 <tr>
-                                    <th style="width: 50px;">Row #</th>
-                                    <th style="width: 80px;">Status</th>
-                                    <th>Customer</th>
-                                    <th>Mobile</th>
-                                    <th>Date</th>
-                                    <th>Type</th>
-                                    <th>Dept</th>
-                                    <th>From Dept</th>
-                                    <th>Validation Notes / Errors</th>
+                                    <th style="width: 50px; text-align: center;">Row</th>
+                                    <th style="width: 80px; text-align: center;">Status</th>
+                                    <th style="min-width: 140px;">Customer Name *</th>
+                                    <th style="min-width: 120px;">Mobile *</th>
+                                    <th style="min-width: 100px;">Date *</th>
+                                    <th style="min-width: 120px;">Complaint Type *</th>
+                                    <th style="min-width: 130px;">Department *</th>
+                                    <th style="min-width: 95px;">From Dept *</th>
+                                    <th style="min-width: 95px;">Invoice No.</th>
+                                    <th style="min-width: 95px;">Priority</th>
+                                    <th style="min-width: 110px;">Status</th>
+                                    <th style="min-width: 130px;">Salesperson</th>
+                                    <th style="min-width: 140px;">Remarks</th>
+                                    <th style="min-width: 140px;">Complaint Details</th>
+                                    <th style="min-width: 85px;">GR Amount</th>
+                                    <th style="min-width: 105px;">GR Exp. Date</th>
+                                    <th style="min-width: 180px;">Validation Notes / Errors</th>
+                                    <th style="width: 75px; text-align: center;">Action</th>
                                 </tr>
                             </thead>
                             <tbody id="preview-table-body">
-                                <!-- Populated dynamically -->
+                                <!-- Populated dynamically with inline editable cells -->
                             </tbody>
                         </table>
                     </div>
 
+                    <!-- Preview Pagination & Showing Bar -->
+                    <div class="table-pagination-bar" id="preview-pagination-bar" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 4px 4px; margin-top: 8px; flex-wrap: wrap; gap: 8px;">
+                        <div class="pagination-info text-muted" id="preview-pagination-info" style="font-size: 0.84rem;">
+                            Showing 0 to 0 of 0 rows
+                        </div>
+                        <div class="pagination-buttons" id="preview-pagination-controls" style="display: flex; gap: 4px;">
+                            <!-- Dynamically generated pagination pills -->
+                        </div>
+                    </div>
+
                     <!-- Step 2 Footer Actions -->
-                    <div style="margin-top: 18px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 14px;">
+                    <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 12px; flex-wrap: wrap; gap: 10px;">
                         <button type="button" class="btn btn-outline-secondary btn-sm" onclick="resetExcelImportModal()">
                             &larr; Choose Different File
                         </button>
-                        <div style="display: flex; gap: 10px;">
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                             <button type="button" class="btn btn-secondary" onclick="closeExcelImportModal()">Cancel</button>
-                            <button type="button" class="btn btn-success" id="btn-commit-import" onclick="commitExcelImport()" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600;">
+                            <button type="button" class="btn btn-outline-success" id="btn-commit-valid-only" onclick="commitExcelImport(true)" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600;">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                                <span id="btn-commit-valid-label">Import Valid Only (0)</span>
+                            </button>
+                            <button type="button" class="btn btn-success" id="btn-commit-import" onclick="commitExcelImport(false)" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600;">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                                <span id="btn-commit-label">Import Valid Complaints</span>
+                                <span id="btn-commit-label">Import All (0)</span>
                             </button>
                         </div>
                     </div>

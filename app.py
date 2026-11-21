@@ -1285,6 +1285,59 @@ def preview_excel_import():
         return jsonify({'status': 'error', 'message': f"Failed to parse and validate Excel file: {str(e)}"}), 500
 
 
+@app.route('/api/complaints/import/master-options', methods=['GET'])
+@login_required
+@permission_required('complaints:create')
+def get_import_master_options():
+    """
+    Returns active company departments, complaint types, salespersons,
+    from-departments, priorities, and statuses for frontend dropdowns and datalists.
+    """
+    try:
+        db = get_db()
+        options = ExcelImportService.get_master_options(db)
+        return jsonify({
+            'status': 'success',
+            'data': options
+        })
+    except Exception as e:
+        logger.error(f"Error fetching import master options: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to fetch master options: {str(e)}"}), 500
+
+
+@app.route('/api/complaints/import/revalidate', methods=['POST'])
+@login_required
+@permission_required('complaints:create')
+def revalidate_excel_import():
+    """
+    Revalidates modified rows from the frontend editable preview table.
+    Updates preview cache and returns recomputed valid/invalid rows and counts.
+    """
+    try:
+        user = get_current_user()
+        db = get_db()
+        data = request.get_json(silent=True) or {}
+        preview_token = data.get('preview_token')
+        rows = data.get('rows', [])
+
+        if not preview_token:
+            return jsonify({'status': 'error', 'message': 'Preview token is required.'}), 400
+
+        result = ExcelImportService.revalidate_batch(preview_token, rows, current_user=user, db_engine=db)
+
+        return jsonify({
+            'status': 'success',
+            'data': result
+        })
+    except PermissionError as pe:
+        return jsonify({'status': 'error', 'message': str(pe)}), 403
+    except ValueError as ve:
+        return jsonify({'status': 'error', 'message': str(ve)}), 400
+    except Exception as e:
+        logger.error(f"Error revalidating Excel import rows: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f"Failed to revalidate rows: {str(e)}"}), 500
+
+
 @app.route('/api/complaints/import/commit', methods=['POST'])
 @login_required
 @permission_required('complaints:create')
@@ -1292,6 +1345,7 @@ def commit_excel_import():
     """
     Imports the validated complaint rows into Google Sheets Complaints & Status History.
     Verifies user preview session, executes batch append, and records audit trail.
+    Supports importing valid rows while retaining remaining invalid rows in the preview cache.
     """
     try:
         user = get_current_user()
@@ -1301,6 +1355,11 @@ def commit_excel_import():
         preview_token = data.get('preview_token')
         if not preview_token:
             return jsonify({'status': 'error', 'message': 'Preview token is required.'}), 400
+
+        # Optional rows payload if modified in frontend before commit
+        rows = data.get('rows')
+        if rows is not None:
+            ExcelImportService.revalidate_batch(preview_token, rows, current_user=user, db_engine=db)
 
         preview_data = ExcelImportService.get_cached_preview(preview_token)
         if not preview_data:
@@ -1320,6 +1379,12 @@ def commit_excel_import():
         # Bulk write to Google Sheets Complaints & Status History
         created_records = db.bulk_create_complaints(valid_rows, user)
 
+        # Retain invalid rows in cache if user chose to import valid only
+        import_valid_only = data.get('import_valid_only', True)
+        remaining_invalid = preview_data.get('invalid_rows', [])
+        if import_valid_only:
+            preview_data['valid_rows'] = []
+
         # Audit logging
         try:
             db.log_audit_event(
@@ -1330,7 +1395,7 @@ def commit_excel_import():
                 module='COMPLAINTS',
                 record_id=f"BATCH-{len(created_records)}",
                 department=user.get('department'),
-                details=f"Bulk imported {len(created_records)} complaint(s) via Excel upload ({len(preview_data.get('invalid_rows', []))} rejected).",
+                details=f"Bulk imported {len(created_records)} complaint(s) via Excel upload ({len(remaining_invalid)} remaining invalid).",
                 result='SUCCESS',
                 ip_address=request.remote_addr
             )
@@ -1341,7 +1406,8 @@ def commit_excel_import():
             'status': 'success',
             'message': f"Successfully imported {len(created_records)} complaint(s).",
             'imported_count': len(created_records),
-            'failed_count': len(preview_data.get('invalid_rows', []))
+            'failed_count': len(remaining_invalid),
+            'remaining_invalid': remaining_invalid
         })
     except Exception as e:
         logger.error(f"Error committing Excel import: {e}", exc_info=True)

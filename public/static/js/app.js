@@ -152,10 +152,10 @@ function setupEventListeners() {
     const manageDept = document.getElementById('manage-dept-filter');
     const managePrio = document.getElementById('manage-priority-filter');
     const manageStatus = document.getElementById('manage-status-filter');
-    if (manageSearch) manageSearch.addEventListener('input', filterManageComplaints);
-    if (manageDept) manageDept.addEventListener('change', filterManageComplaints);
-    if (managePrio) managePrio.addEventListener('change', filterManageComplaints);
-    if (manageStatus) manageStatus.addEventListener('change', filterManageComplaints);
+    if (manageSearch) manageSearch.addEventListener('input', () => filterManageComplaints(1));
+    if (manageDept) manageDept.addEventListener('change', () => filterManageComplaints(1));
+    if (managePrio) managePrio.addEventListener('change', () => filterManageComplaints(1));
+    if (manageStatus) manageStatus.addEventListener('change', () => filterManageComplaints(1));
 
     // Auto calculate time taken on Lodge form
     const lodgeDate = document.getElementById('comp-date');
@@ -1806,6 +1806,27 @@ function filterMyComplaints(page = 1) {
     myComplaintsState.totalPages = Math.max(1, Math.ceil(filtered.length / myComplaintsState.pageSize));
     myComplaintsState.page = Math.max(1, Math.min(page, myComplaintsState.totalPages));
 
+    const totalCount = (myComplaintsCache || []).length;
+    const filteredCount = filtered.length;
+    const startNum = filteredCount > 0 ? (myComplaintsState.page - 1) * myComplaintsState.pageSize + 1 : 0;
+    const endNum = Math.min(filteredCount, myComplaintsState.page * myComplaintsState.pageSize);
+    const showingStr = `Showing ${startNum}–${endNum} of ${filteredCount}`;
+
+    // Live count updates for My Complaints (Top and Bottom)
+    const topTotal = document.getElementById('my-count-total');
+    const topFiltered = document.getElementById('my-count-filtered');
+    const topShowing = document.getElementById('my-count-showing');
+    const btmTotal = document.getElementById('my-bottom-count-total');
+    const btmFiltered = document.getElementById('my-bottom-count-filtered');
+    const btmShowing = document.getElementById('my-bottom-count-showing');
+
+    if (topTotal) topTotal.textContent = totalCount.toLocaleString();
+    if (topFiltered) topFiltered.textContent = filteredCount.toLocaleString();
+    if (topShowing) topShowing.textContent = showingStr;
+    if (btmTotal) btmTotal.textContent = totalCount.toLocaleString();
+    if (btmFiltered) btmFiltered.textContent = filteredCount.toLocaleString();
+    if (btmShowing) btmShowing.textContent = showingStr;
+
     const start = (myComplaintsState.page - 1) * myComplaintsState.pageSize;
     const end = start + myComplaintsState.pageSize;
     const pagedRecords = filtered.slice(start, end);
@@ -1877,15 +1898,17 @@ function renderMyPagination(p) {
     const controlsEl = document.getElementById('my-pagination-controls');
     if (!infoEl || !controlsEl) return;
 
-    if (!p || p.totalRecords === 0) {
-        infoEl.textContent = 'Showing 0 to 0 of 0 complaints';
+    const totalAll = (myComplaintsCache || []).length;
+    const totalFiltered = p ? p.totalRecords : 0;
+    if (!p || totalFiltered === 0) {
+        infoEl.innerHTML = `Total Records: <strong>${totalAll.toLocaleString()}</strong> | Filtered Records: <strong>0</strong> | Showing 0–0 of 0`;
         controlsEl.innerHTML = '';
         return;
     }
 
     const start = (p.page - 1) * p.pageSize + 1;
-    const end = Math.min(p.totalRecords, p.page * p.pageSize);
-    infoEl.textContent = `Showing ${start} to ${end} of ${p.totalRecords} complaints`;
+    const end = Math.min(totalFiltered, p.page * p.pageSize);
+    infoEl.innerHTML = `Total Records: <strong>${totalAll.toLocaleString()}</strong> | Filtered Records: <strong>${totalFiltered.toLocaleString()}</strong> | Showing ${start}–${end} of ${totalFiltered.toLocaleString()}`;
 
     if (p.totalPages <= 1) {
         controlsEl.innerHTML = '';
@@ -1935,6 +1958,25 @@ function handleMyPageSizeChange(e) {
     filterMyComplaints(1);
 }
 
+// Manage Complaints Pagination & Live Filtering State
+let manageComplaintsState = {
+    page: 1,
+    pageSize: 25,
+    totalPages: 1,
+    filteredRecords: []
+};
+
+function handleManagePageSizeChange(e) {
+    const val = e.target.value;
+    manageComplaintsState.pageSize = val === 'all' ? 'all' : (parseInt(val) || 25);
+    filterManageComplaints(1);
+}
+
+function goToManagePage(page) {
+    if (page < 1 || page > manageComplaintsState.totalPages) return;
+    filterManageComplaints(page);
+}
+
 async function loadManageComplaints() {
     try {
         const res = await fetch('/api/complaints');
@@ -1942,14 +1984,14 @@ async function loadManageComplaints() {
         if (res.ok && data.complaints) {
             allComplaintsCache = data.complaints;
             await loadStaffUsersList();
-            filterManageComplaints();
+            filterManageComplaints(1);
         }
     } catch (e) {
         console.error("Manage complaints load failed:", e);
     }
 }
 
-function filterManageComplaints() {
+function filterManageComplaints(page = 1) {
     const search = (document.getElementById('manage-search-input')?.value || '').toLowerCase().trim();
     const dept = document.getElementById('manage-dept-filter')?.value || 'ALL';
     const status = document.getElementById('manage-status-filter')?.value || 'ALL';
@@ -1967,16 +2009,117 @@ function filterManageComplaints() {
             (c['Department Name'] || '').toLowerCase().includes(search) ||
             (c.Department || '').toLowerCase().includes(search) ||
             (c['Vendor Name'] || '').toLowerCase().includes(search) ||
+            (c['Salesperson Name'] || '').toLowerCase().includes(search) ||
+            (c['Handled By'] || '').toLowerCase().includes(search) ||
             (c['Employee Name'] || '').toLowerCase().includes(search);
 
         const depts = (c['Department Name'] || c.Department || '').split(',').map(s => s.trim().toLowerCase());
         const matchDept = dept === 'ALL' || depts.includes(dept.toLowerCase());
-        const matchStatus = status === 'ALL' || c.Status === status;
-        const matchPriority = priority === 'ALL' || c.Priority === priority;
+        const matchStatus = status === 'ALL' || (c.Status || '').toLowerCase() === status.toLowerCase();
+        const matchPriority = priority === 'ALL' || (c.Priority || '').toLowerCase() === priority.toLowerCase();
         return matchSearch && matchDept && matchStatus && matchPriority;
     });
 
-    renderManageTable(filtered);
+    manageComplaintsState.filteredRecords = filtered;
+    const isAll = manageComplaintsState.pageSize === 'all';
+    const pageSize = isAll ? Math.max(1, filtered.length) : (parseInt(manageComplaintsState.pageSize) || 25);
+    manageComplaintsState.totalPages = isAll ? 1 : Math.max(1, Math.ceil(filtered.length / pageSize));
+    manageComplaintsState.page = Math.max(1, Math.min(page, manageComplaintsState.totalPages));
+
+    const totalCount = allComplaintsCache.length;
+    const filteredCount = filtered.length;
+    let start = 0;
+    let end = 0;
+    let pagedRecords = [];
+
+    if (filteredCount === 0) {
+        start = 0;
+        end = 0;
+        pagedRecords = [];
+    } else if (isAll) {
+        start = 1;
+        end = filteredCount;
+        pagedRecords = filtered;
+    } else {
+        start = (manageComplaintsState.page - 1) * pageSize + 1;
+        end = Math.min(filteredCount, manageComplaintsState.page * pageSize);
+        pagedRecords = filtered.slice((manageComplaintsState.page - 1) * pageSize, manageComplaintsState.page * pageSize);
+    }
+
+    const showingStr = `Showing ${start}–${end} of ${filteredCount}`;
+
+    // Live count updates for Manage Complaints (Top and Bottom)
+    const topTotal = document.getElementById('manage-count-total');
+    const topFiltered = document.getElementById('manage-count-filtered');
+    const topShowing = document.getElementById('manage-count-showing');
+    const btmTotal = document.getElementById('manage-bottom-count-total');
+    const btmFiltered = document.getElementById('manage-bottom-count-filtered');
+    const btmShowing = document.getElementById('manage-bottom-count-showing');
+
+    if (topTotal) topTotal.textContent = totalCount.toLocaleString();
+    if (topFiltered) topFiltered.textContent = filteredCount.toLocaleString();
+    if (topShowing) topShowing.textContent = showingStr;
+    if (btmTotal) btmTotal.textContent = totalCount.toLocaleString();
+    if (btmFiltered) btmFiltered.textContent = filteredCount.toLocaleString();
+    if (btmShowing) btmShowing.textContent = showingStr;
+
+    renderManageTable(pagedRecords);
+    renderManagePagination({
+        page: manageComplaintsState.page,
+        pageSize: pageSize,
+        totalRecords: filteredCount,
+        totalPages: manageComplaintsState.totalPages,
+        isAll: isAll
+    });
+}
+
+function renderManagePagination(p) {
+    const infoEl = document.getElementById('manage-pagination-info');
+    const controlsEl = document.getElementById('manage-pagination-controls');
+    if (!infoEl || !controlsEl) return;
+
+    const totalAll = (allComplaintsCache || []).length;
+    const totalFiltered = p.totalRecords;
+    if (!p || totalFiltered === 0) {
+        infoEl.innerHTML = `Total Records: <strong>${totalAll.toLocaleString()}</strong> | Filtered Records: <strong>0</strong> | Showing 0–0 of 0`;
+        controlsEl.innerHTML = '';
+        return;
+    }
+
+    const start = (p.page - 1) * p.pageSize + 1;
+    const end = Math.min(totalFiltered, p.page * p.pageSize);
+    infoEl.innerHTML = `Total Records: <strong>${totalAll.toLocaleString()}</strong> | Filtered Records: <strong>${totalFiltered.toLocaleString()}</strong> | Showing ${start}–${end} of ${totalFiltered.toLocaleString()}`;
+
+    if (p.totalPages <= 1 || p.isAll) {
+        controlsEl.innerHTML = '';
+        return;
+    }
+
+    let buttonsHtml = '';
+    buttonsHtml += `<button type="button" class="btn btn-secondary btn-sm" ${p.page <= 1 ? 'disabled' : ''} onclick="goToManagePage(${p.page - 1})">&larr; Prev</button>`;
+
+    const cur = p.page;
+    const total = p.totalPages;
+    const range = [];
+    for (let i = 1; i <= total; i++) {
+        if (i === 1 || i === total || (i >= cur - 1 && i <= cur + 1)) {
+            range.push(i);
+        } else if (range[range.length - 1] !== '...') {
+            range.push('...');
+        }
+    }
+
+    range.forEach(item => {
+        if (item === '...') {
+            buttonsHtml += `<span class="pagination-ellipsis" style="padding: 4px 6px; color: var(--text-muted);">...</span>`;
+        } else {
+            const isActive = (item === cur);
+            buttonsHtml += `<button type="button" class="btn ${isActive ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="goToManagePage(${item})">${item}</button>`;
+        }
+    });
+
+    buttonsHtml += `<button type="button" class="btn btn-secondary btn-sm" ${p.page >= total ? 'disabled' : ''} onclick="goToManagePage(${p.page + 1})">Next &rarr;</button>`;
+    controlsEl.innerHTML = buttonsHtml;
 }
 
 function renderManageTable(complaints) {
@@ -5887,13 +6030,54 @@ function exportAuditTrailCsv() {
 }
 
 // =============================================================================
-// EXCEL BULK IMPORT & TEMPLATE DOWNLOAD LOGIC
+// EXCEL BULK IMPORT & SMART VALIDATION EDITABLE PREVIEW LOGIC
 // =============================================================================
 
 let _currentExcelFile = null;
 let _currentPreviewData = null;
-let _currentPreviewTab = 'all';
+let _currentPreviewTab = 'all'; // 'all' | 'valid' | 'invalid'
+let _previewSearchTerm = '';
+let _previewPage = 1;
+let _previewPageSize = 50; // 25, 50, 100, 'all'
+let _previewRows = []; // Master editable rows
 let _dropZoneConfigured = false;
+let _previewMasterOptions = {
+    departments: [],
+    complain_types: [],
+    salespersons: [],
+    from_departments: ['Online', 'Offline', 'Packing', 'None'],
+    priorities: ['Low', 'Medium', 'High', 'Urgent'],
+    statuses: ['Submitted', 'Under Review', 'In Progress', 'Resolved', 'Closed']
+};
+
+async function loadImportMasterOptions() {
+    try {
+        const res = await fetch('/api/complaints/import/master-options');
+        const data = await res.json();
+        if (res.ok && data.status === 'success' && data.data) {
+            _previewMasterOptions = data.data;
+            populateMasterDatalists();
+        }
+    } catch (e) {
+        console.warn("Could not load import master options:", e);
+    }
+}
+
+function populateMasterDatalists() {
+    const deptDl = document.getElementById('preview-dept-datalist');
+    const typeDl = document.getElementById('preview-type-datalist');
+    const spDl = document.getElementById('preview-sp-datalist');
+
+    if (deptDl && _previewMasterOptions.departments) {
+        deptDl.innerHTML = _previewMasterOptions.departments.map(d => `<option value="${escapeHtml(d)}">`).join('');
+    }
+    if (typeDl && _previewMasterOptions.complain_types) {
+        typeDl.innerHTML = _previewMasterOptions.complain_types.map(t => `<option value="${escapeHtml(t)}">`).join('');
+    }
+    if (spDl && _previewMasterOptions.salespersons) {
+        spDl.innerHTML = _previewMasterOptions.salespersons.map(s => `<option value="${escapeHtml(s)}">`).join('');
+    }
+}
 
 function openExcelImportModal() {
     resetExcelImportModal();
@@ -5903,6 +6087,7 @@ function openExcelImportModal() {
         document.body.classList.add('modal-open');
     }
     setupExcelDropZone();
+    loadImportMasterOptions();
 }
 
 function closeExcelImportModal() {
@@ -5993,6 +6178,10 @@ function resetExcelImportModal() {
     _currentExcelFile = null;
     _currentPreviewData = null;
     _currentPreviewTab = 'all';
+    _previewSearchTerm = '';
+    _previewPage = 1;
+    _previewPageSize = 50;
+    _previewRows = [];
 
     const input = document.getElementById('excel-file-input');
     if (input) input.value = '';
@@ -6000,6 +6189,9 @@ function resetExcelImportModal() {
     if (pill) pill.style.display = 'none';
     const validateBtn = document.getElementById('btn-validate-excel');
     if (validateBtn) validateBtn.disabled = true;
+
+    const searchInput = document.getElementById('preview-search-input');
+    if (searchInput) searchInput.value = '';
 
     const stepUpload = document.getElementById('excel-step-upload');
     const stepPreview = document.getElementById('excel-step-preview');
@@ -6038,7 +6230,17 @@ async function uploadAndValidateExcel() {
         }
 
         _currentPreviewData = data.data;
-        displayExcelPreview(_currentPreviewData);
+        if (_currentPreviewData.master_options) {
+            _previewMasterOptions = _currentPreviewData.master_options;
+            populateMasterDatalists();
+        }
+
+        // Initialize master editable rows
+        const valids = (_currentPreviewData.valid_rows || []).map(r => ({ ...r, _isValid: true, _dirty: false }));
+        const invalids = (_currentPreviewData.invalid_rows || []).map(r => ({ ...r, _isValid: false, _dirty: false }));
+        _previewRows = [...valids, ...invalids].sort((a, b) => (a.row_number || 0) - (b.row_number || 0));
+
+        displayExcelPreview();
     } catch (err) {
         console.error('Validation error:', err);
         showToast(err.message || 'Validation failed. Please check the Excel file.', 'error');
@@ -6047,41 +6249,58 @@ async function uploadAndValidateExcel() {
     }
 }
 
-function displayExcelPreview(preview) {
+function updatePreviewMetrics() {
+    const totalCount = _previewRows.length;
+    const validCount = _previewRows.filter(r => r._isValid).length;
+    const invalidCount = _previewRows.filter(r => !r._isValid).length;
+
+    const totalEl = document.getElementById('preview-metric-total');
+    const validEl = document.getElementById('preview-metric-valid');
+    const invalidEl = document.getElementById('preview-metric-invalid');
+
+    if (totalEl) totalEl.textContent = totalCount.toLocaleString();
+    if (validEl) validEl.textContent = validCount.toLocaleString();
+    if (invalidEl) invalidEl.textContent = invalidCount.toLocaleString();
+
+    const tabAll = document.getElementById('tab-count-all');
+    const tabValid = document.getElementById('tab-count-valid');
+    const tabInvalid = document.getElementById('tab-count-invalid');
+
+    if (tabAll) tabAll.textContent = totalCount.toLocaleString();
+    if (tabValid) tabValid.textContent = validCount.toLocaleString();
+    if (tabInvalid) tabInvalid.textContent = invalidCount.toLocaleString();
+
+    const noticeValid = document.getElementById('preview-notice-valid');
+    const noticeErrors = document.getElementById('preview-notice-errors');
+    const errBtn = document.getElementById('btn-download-error-report');
+
+    if (noticeValid) noticeValid.style.display = validCount > 0 ? 'block' : 'none';
+    if (noticeErrors) noticeErrors.style.display = invalidCount > 0 ? 'block' : 'none';
+    if (errBtn) errBtn.style.display = invalidCount > 0 ? 'inline-flex' : 'none';
+
+    // Commit buttons
+    const btnValidOnly = document.getElementById('btn-commit-valid-only');
+    const lblValidOnly = document.getElementById('btn-commit-valid-label');
+    const btnCommitAll = document.getElementById('btn-commit-import');
+    const lblCommitAll = document.getElementById('btn-commit-label');
+
+    if (btnValidOnly) btnValidOnly.disabled = (validCount === 0);
+    if (lblValidOnly) lblValidOnly.textContent = `Import Valid Only (${validCount.toLocaleString()})`;
+
+    if (btnCommitAll) btnCommitAll.disabled = (totalCount === 0 || invalidCount > 0);
+    if (lblCommitAll) lblCommitAll.textContent = invalidCount > 0 ? `Import All (${totalCount.toLocaleString()}) [Fix Errors First]` : `Import All (${totalCount.toLocaleString()} Records)`;
+}
+
+function displayExcelPreview() {
     const spinner = document.getElementById('excel-loading-spinner');
     const stepPreview = document.getElementById('excel-step-preview');
 
     if (spinner) spinner.style.display = 'none';
     if (stepPreview) stepPreview.style.display = 'block';
 
-    const totalEl = document.getElementById('preview-metric-total');
-    const validEl = document.getElementById('preview-metric-valid');
-    const invalidEl = document.getElementById('preview-metric-invalid');
-
-    if (totalEl) totalEl.textContent = preview.total_rows || 0;
-    if (validEl) validEl.textContent = preview.valid_count || 0;
-    if (invalidEl) invalidEl.textContent = preview.invalid_count || 0;
-
-    const noticeValid = document.getElementById('preview-notice-valid');
-    const noticeErrors = document.getElementById('preview-notice-errors');
-    const errBtn = document.getElementById('btn-download-error-report');
-
-    if (noticeValid) noticeValid.style.display = preview.valid_count > 0 ? 'block' : 'none';
-    if (noticeErrors) noticeErrors.style.display = preview.invalid_count > 0 ? 'block' : 'none';
-    if (errBtn) errBtn.style.display = preview.invalid_count > 0 ? 'inline-flex' : 'none';
-
-    const commitBtn = document.getElementById('btn-commit-import');
-    const commitLabel = document.getElementById('btn-commit-label');
-    if (commitBtn) {
-        commitBtn.disabled = preview.valid_count === 0;
-    }
-    if (commitLabel) {
-        commitLabel.textContent = preview.valid_count > 0 
-            ? `Import ${preview.valid_count} Valid Complaint${preview.valid_count === 1 ? '' : 's'}`
-            : 'No Valid Complaints to Import';
-    }
-
+    updatePreviewMetrics();
     _currentPreviewTab = 'all';
+    _previewPage = 1;
     switchPreviewTab('all');
 }
 
@@ -6095,82 +6314,412 @@ function switchPreviewTab(tab) {
         }
     });
 
+    _previewPage = 1;
     renderPreviewTable();
+}
+
+function filterPreviewTable() {
+    const input = document.getElementById('preview-search-input');
+    _previewSearchTerm = (input?.value || '').toLowerCase().trim();
+    _previewPage = 1;
+    renderPreviewTable();
+}
+
+function handlePreviewPageSizeChange(e) {
+    const val = e.target.value;
+    _previewPageSize = val === 'all' ? 'all' : (parseInt(val) || 50);
+    _previewPage = 1;
+    renderPreviewTable();
+}
+
+function goToPreviewPage(page) {
+    _previewPage = page;
+    renderPreviewTable();
+}
+
+function checkCellHasError(r, field) {
+    if (!r.errors || !r.errors.length) return false;
+    const fLower = field.toLowerCase();
+    return r.errors.some(err => {
+        const eLow = err.toLowerCase();
+        if (fLower === 'customer_name' && (eLow.includes('customer name') || eLow.includes('complainant'))) return true;
+        if (fLower === 'customer_mobile' && (eLow.includes('mobile') || eLow.includes('phone') || eLow.includes('10 digits'))) return true;
+        if (fLower === 'complain_date' && (eLow.includes('date') && !eLow.includes('expected') && !eLow.includes('closing'))) return true;
+        if (fLower === 'complain_types' && (eLow.includes('type') || eLow.includes('issue') || eLow.includes('subject'))) return true;
+        if (fLower === 'department_name' && (eLow.includes('department') && !eLow.includes('from department') && !eLow.includes('from dept'))) return true;
+        if (fLower === 'from_department' && (eLow.includes('from department') || eLow.includes('from dept'))) return true;
+        if (fLower === 'gr_expected_date' && (eLow.includes('gr expected date') || eLow.includes('expected date'))) return true;
+        if (fLower === 'gr_amount' && eLow.includes('gr amount')) return true;
+        if (fLower === 'status' && eLow.includes('status')) return true;
+        return false;
+    });
+}
+
+function getCellErrorTooltip(r, field) {
+    if (!r.errors || !r.errors.length) return '';
+    const fLower = field.toLowerCase();
+    const matching = r.errors.filter(err => {
+        const eLow = err.toLowerCase();
+        if (fLower === 'customer_name' && (eLow.includes('customer name') || eLow.includes('complainant'))) return true;
+        if (fLower === 'customer_mobile' && (eLow.includes('mobile') || eLow.includes('phone') || eLow.includes('10 digits'))) return true;
+        if (fLower === 'complain_date' && (eLow.includes('date') && !eLow.includes('expected') && !eLow.includes('closing'))) return true;
+        if (fLower === 'complain_types' && (eLow.includes('type') || eLow.includes('issue') || eLow.includes('subject'))) return true;
+        if (fLower === 'department_name' && (eLow.includes('department') && !eLow.includes('from department') && !eLow.includes('from dept'))) return true;
+        if (fLower === 'from_department' && (eLow.includes('from department') || eLow.includes('from dept'))) return true;
+        if (fLower === 'gr_expected_date' && (eLow.includes('gr expected date') || eLow.includes('expected date'))) return true;
+        if (fLower === 'gr_amount' && eLow.includes('gr amount')) return true;
+        if (fLower === 'status' && eLow.includes('status')) return true;
+        return false;
+    });
+    return matching.join(' | ');
 }
 
 function renderPreviewTable() {
     const tbody = document.getElementById('preview-table-body');
-    if (!tbody || !_currentPreviewData) return;
+    if (!tbody || !_previewRows) return;
 
-    let rowsToRender = [];
-    if (_currentPreviewTab === 'all') {
-        const validWithStatus = (_currentPreviewData.valid_rows || []).map(r => ({ ...r, _isValid: true }));
-        const invalidWithStatus = (_currentPreviewData.invalid_rows || []).map(r => ({ ...r, _isValid: false }));
-        rowsToRender = [...validWithStatus, ...invalidWithStatus].sort((a, b) => (a.row_number || 0) - (b.row_number || 0));
-    } else if (_currentPreviewTab === 'valid') {
-        rowsToRender = (_currentPreviewData.valid_rows || []).map(r => ({ ...r, _isValid: true }));
+    // Filter by tab
+    let filtered = _previewRows;
+    if (_currentPreviewTab === 'valid') {
+        filtered = filtered.filter(r => r._isValid);
     } else if (_currentPreviewTab === 'invalid') {
-        rowsToRender = (_currentPreviewData.invalid_rows || []).map(r => ({ ...r, _isValid: false }));
+        filtered = filtered.filter(r => !r._isValid);
     }
 
-    if (rowsToRender.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">No records in this tab.</td></tr>';
+    // Filter by search term
+    if (_previewSearchTerm) {
+        filtered = filtered.filter(r => {
+            const blob = [
+                r.row_number,
+                r.customer_name,
+                r.customer_mobile,
+                r.invoice_no,
+                r.complain_types,
+                r.department_name,
+                r.from_department,
+                r.salesperson_name,
+                r.remarks,
+                r.complain_details,
+                r.status,
+                (r.errors || []).join(' ')
+            ].join(' ').toLowerCase();
+            return blob.includes(_previewSearchTerm);
+        });
+    }
+
+    const totalFiltered = filtered.length;
+    const isAll = _previewPageSize === 'all';
+    const pageSize = isAll ? Math.max(1, totalFiltered) : parseInt(_previewPageSize);
+    const totalPages = isAll ? 1 : Math.max(1, Math.ceil(totalFiltered / pageSize));
+    _previewPage = Math.max(1, Math.min(_previewPage, totalPages));
+
+    const startIdx = totalFiltered === 0 ? 0 : (_previewPage - 1) * pageSize;
+    const endIdx = isAll ? totalFiltered : Math.min(totalFiltered, _previewPage * pageSize);
+    const pagedRows = totalFiltered === 0 ? [] : (isAll ? filtered : filtered.slice(startIdx, endIdx));
+
+    // Render pagination info
+    const infoEl = document.getElementById('preview-pagination-info');
+    const controlsEl = document.getElementById('preview-pagination-controls');
+    if (infoEl) {
+        infoEl.innerHTML = totalFiltered === 0
+            ? 'Showing 0 to 0 of 0 rows'
+            : `Showing <strong>${startIdx + 1}</strong> to <strong>${endIdx}</strong> of <strong>${totalFiltered.toLocaleString()}</strong> rows`;
+    }
+
+    if (controlsEl) {
+        if (totalPages <= 1 || isAll) {
+            controlsEl.innerHTML = '';
+        } else {
+            let btns = `<button type="button" class="btn btn-secondary btn-sm" ${(_previewPage <= 1 ? 'disabled' : '')} onclick="goToPreviewPage(${_previewPage - 1})">&larr; Prev</button>`;
+            const cur = _previewPage;
+            const range = [];
+            for (let i = 1; i <= totalPages; i++) {
+                if (i === 1 || i === totalPages || (i >= cur - 1 && i <= cur + 1)) {
+                    range.push(i);
+                } else if (range[range.length - 1] !== '...') {
+                    range.push('...');
+                }
+            }
+            range.forEach(item => {
+                if (item === '...') {
+                    btns += `<span class="pagination-ellipsis" style="padding: 3px 6px; color: #94a3b8;">...</span>`;
+                } else {
+                    const active = item === cur;
+                    btns += `<button type="button" class="btn ${active ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="goToPreviewPage(${item})">${item}</button>`;
+                }
+            });
+            btns += `<button type="button" class="btn btn-secondary btn-sm" ${(_previewPage >= totalPages ? 'disabled' : '')} onclick="goToPreviewPage(${_previewPage + 1})">Next &rarr;</button>`;
+            controlsEl.innerHTML = btns;
+        }
+    }
+
+    if (pagedRows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="18" style="text-align: center; color: #64748b; padding: 28px;">No matching records in this view.</td></tr>';
         return;
     }
 
-    tbody.innerHTML = rowsToRender.map(r => {
+    const fromDepts = ['Online', 'Offline', 'Packing', 'None'];
+    const priorities = ['Low', 'Medium', 'High', 'Urgent'];
+    const statuses = ['Submitted', 'Under Review', 'In Progress', 'Resolved', 'Closed'];
+
+    tbody.innerHTML = pagedRows.map(r => {
+        const rowNum = r.row_number;
         const statusBadge = r._isValid
             ? '<span class="excel-badge-valid">&#10003; Valid</span>'
             : '<span class="excel-badge-invalid">&#10007; Rejected</span>';
 
+        const rowBg = r._isValid ? 'transparent' : '#fff5f5';
+
+        // Error highlights
+        const nameErr = checkCellHasError(r, 'customer_name');
+        const mobErr = checkCellHasError(r, 'customer_mobile');
+        const dateErr = checkCellHasError(r, 'complain_date');
+        const typeErr = checkCellHasError(r, 'complain_types');
+        const deptErr = checkCellHasError(r, 'department_name');
+        const fromErr = checkCellHasError(r, 'from_department');
+        const statusErr = checkCellHasError(r, 'status');
+        const grDateErr = checkCellHasError(r, 'gr_expected_date');
+        const grAmtErr = checkCellHasError(r, 'gr_amount');
+
         let notesHtml = '';
         if (r._isValid) {
-            notesHtml = '<span style="color: #16a34a; font-size: 0.8rem;">Ready for import</span>';
+            notesHtml = '<span style="color: #16a34a; font-size: 0.78rem; font-weight: 600;">✓ Ready to import</span>';
         } else {
-            const errs = r.errors || [];
-            notesHtml = '<ul style="margin: 0; padding-left: 16px; color: #dc2626; font-size: 0.8rem;">' +
-                errs.map(e => `<li>${escapeHtml(e)}</li>`).join('') +
-                '</ul>';
+            notesHtml = (r.errors || []).map(e => `<div class="preview-error-tag" title="${escapeHtml(e)}">${escapeHtml(e)}</div>`).join('');
         }
 
-        const trBg = r._isValid ? 'transparent' : '#fff5f5';
+        const fromVal = (r.from_department || 'Online').trim();
+        const prioVal = (r.priority || 'Medium').trim();
+        const statVal = (r.status || 'Submitted').trim();
 
         return `
-            <tr style="background: ${trBg};">
-                <td style="font-weight: 600; text-align: center;">${r.row_number || '-'}</td>
-                <td>${statusBadge}</td>
-                <td><strong>${escapeHtml(r.customer_name || '-')}</strong></td>
-                <td>${escapeHtml(r.customer_mobile || '-')}</td>
-                <td>${escapeHtml(r.complain_date || '-')}</td>
-                <td>${escapeHtml(r.complain_types || '-')}</td>
-                <td>${escapeHtml(r.department_name || '-')}</td>
-                <td>${escapeHtml(r.from_department || '-')}</td>
-                <td>${notesHtml}</td>
+            <tr style="background: ${rowBg};" id="preview-row-${rowNum}">
+                <td style="font-weight: 700; text-align: center; color: #334155;">${rowNum}</td>
+                <td style="text-align: center;" id="preview-status-badge-${rowNum}">${statusBadge}</td>
+                <td>
+                    <input type="text" class="preview-cell-input ${nameErr ? 'preview-cell-error' : ''}" value="${escapeHtml(r.customer_name || '')}" onchange="updatePreviewCell(${rowNum}, 'customer_name', this.value)" title="${escapeHtml(getCellErrorTooltip(r, 'customer_name'))}">
+                </td>
+                <td>
+                    <input type="text" class="preview-cell-input ${mobErr ? 'preview-cell-error' : ''}" value="${escapeHtml(r.customer_mobile || '')}" onchange="updatePreviewCell(${rowNum}, 'customer_mobile', this.value)" title="${escapeHtml(getCellErrorTooltip(r, 'customer_mobile'))}">
+                </td>
+                <td>
+                    <input type="text" class="preview-cell-input ${dateErr ? 'preview-cell-error' : ''}" value="${escapeHtml(r.complain_date || '')}" onchange="updatePreviewCell(${rowNum}, 'complain_date', this.value)" placeholder="YYYY-MM-DD" title="${escapeHtml(getCellErrorTooltip(r, 'complain_date'))}">
+                </td>
+                <td>
+                    <input list="preview-type-datalist" type="text" class="preview-cell-input ${typeErr ? 'preview-cell-error' : ''}" value="${escapeHtml(r.complain_types || '')}" onchange="updatePreviewCell(${rowNum}, 'complain_types', this.value)" title="${escapeHtml(getCellErrorTooltip(r, 'complain_types'))}">
+                </td>
+                <td>
+                    <input list="preview-dept-datalist" type="text" class="preview-cell-input ${deptErr ? 'preview-cell-error' : ''}" value="${escapeHtml(r.department_name || '')}" onchange="updatePreviewCell(${rowNum}, 'department_name', this.value)" title="${escapeHtml(getCellErrorTooltip(r, 'department_name'))}">
+                </td>
+                <td>
+                    <select class="preview-cell-select ${fromErr ? 'preview-cell-error' : ''}" onchange="updatePreviewCell(${rowNum}, 'from_department', this.value)">
+                        ${fromDepts.map(opt => `<option value="${opt}" ${opt.toLowerCase() === fromVal.toLowerCase() ? 'selected' : ''}>${opt}</option>`).join('')}
+                    </select>
+                </td>
+                <td>
+                    <input type="text" class="preview-cell-input" value="${escapeHtml(r.invoice_no || '')}" onchange="updatePreviewCell(${rowNum}, 'invoice_no', this.value)">
+                </td>
+                <td>
+                    <select class="preview-cell-select" onchange="updatePreviewCell(${rowNum}, 'priority', this.value)">
+                        ${priorities.map(opt => `<option value="${opt}" ${opt.toLowerCase() === prioVal.toLowerCase() ? 'selected' : ''}>${opt}</option>`).join('')}
+                    </select>
+                </td>
+                <td>
+                    <select class="preview-cell-select ${statusErr ? 'preview-cell-error' : ''}" onchange="updatePreviewCell(${rowNum}, 'status', this.value)">
+                        ${statuses.map(opt => `<option value="${opt}" ${opt.toLowerCase() === statVal.toLowerCase() ? 'selected' : ''}>${opt}</option>`).join('')}
+                    </select>
+                </td>
+                <td>
+                    <input list="preview-sp-datalist" type="text" class="preview-cell-input" value="${escapeHtml(r.salesperson_name || '')}" onchange="updatePreviewCell(${rowNum}, 'salesperson_name', this.value)">
+                </td>
+                <td>
+                    <input type="text" class="preview-cell-input" value="${escapeHtml(r.remarks || '')}" onchange="updatePreviewCell(${rowNum}, 'remarks', this.value)">
+                </td>
+                <td>
+                    <input type="text" class="preview-cell-input" value="${escapeHtml(r.complain_details || '')}" onchange="updatePreviewCell(${rowNum}, 'complain_details', this.value)">
+                </td>
+                <td>
+                    <input type="text" class="preview-cell-input ${grAmtErr ? 'preview-cell-error' : ''}" value="${escapeHtml(r.gr_amount || '')}" onchange="updatePreviewCell(${rowNum}, 'gr_amount', this.value)" title="${escapeHtml(getCellErrorTooltip(r, 'gr_amount'))}">
+                </td>
+                <td>
+                    <input type="text" class="preview-cell-input ${grDateErr ? 'preview-cell-error' : ''}" value="${escapeHtml(r.gr_expected_date || '')}" onchange="updatePreviewCell(${rowNum}, 'gr_expected_date', this.value)" placeholder="YYYY-MM-DD" title="${escapeHtml(getCellErrorTooltip(r, 'gr_expected_date'))}">
+                </td>
+                <td id="preview-notes-${rowNum}" style="font-size: 0.8rem; line-height: 1.3;">
+                    ${notesHtml}
+                </td>
+                <td style="text-align: center;">
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="revalidateSingleRow(${rowNum})" title="Validate this row" style="padding: 2px 7px; font-size: 0.74rem;">Check</button>
+                </td>
             </tr>
         `;
     }).join('');
 }
 
-async function commitExcelImport() {
+function updatePreviewCell(rowNumber, field, value) {
+    const row = _previewRows.find(r => r.row_number === rowNumber);
+    if (!row) return;
+
+    row[field] = value;
+    row._dirty = true;
+
+    // Fast inline heuristic check for customer mobile
+    if (field === 'customer_mobile') {
+        const cleanDigits = (value || '').replace(/\D+/g, '');
+        const isPlusIntl = (value || '').trim().startsWith('+');
+        if ((cleanDigits.length === 10 && !isPlusIntl) || (isPlusIntl && cleanDigits.length >= 8 && cleanDigits.length <= 15)) {
+            if (row.errors && row.errors.length) {
+                row.errors = row.errors.filter(e => !e.toLowerCase().includes('mobile') && !e.toLowerCase().includes('phone') && !e.toLowerCase().includes('10 digits'));
+                if (row.errors.length === 0) {
+                    row._isValid = true;
+                }
+            }
+        }
+    }
+
+    // Heuristic check for date fields
+    if (field === 'complain_date' || field === 'gr_expected_date') {
+        const valStr = (value || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(valStr)) {
+            if (row.errors && row.errors.length) {
+                const keyword = field === 'gr_expected_date' ? 'gr expected date' : 'date';
+                row.errors = row.errors.filter(e => !e.toLowerCase().includes(keyword));
+                if (row.errors.length === 0) {
+                    row._isValid = true;
+                }
+            }
+        }
+    }
+
+    updatePreviewMetrics();
+}
+
+async function revalidateSingleRow(rowNumber) {
+    const row = _previewRows.find(r => r.row_number === rowNumber);
+    if (!row) return;
+
+    try {
+        const res = await fetch('/api/complaints/import/revalidate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                preview_token: _currentPreviewData.preview_token,
+                rows: [row]
+            })
+        });
+        const result = await res.json();
+        if (res.ok && result.status === 'success' && result.data) {
+            const updated = (result.data.valid_rows || []).concat(result.data.invalid_rows || [])[0];
+            if (updated) {
+                Object.assign(row, updated);
+                row._isValid = !updated.errors || updated.errors.length === 0;
+                row._dirty = false;
+                updatePreviewMetrics();
+                renderPreviewTable();
+                if (row._isValid) {
+                    showToast(`Row ${rowNumber} is now valid!`, 'success');
+                } else {
+                    showToast(`Row ${rowNumber}: ${row.errors.join('; ')}`, 'warning');
+                }
+            }
+        } else {
+            showToast(result.message || 'Validation failed for row.', 'error');
+        }
+    } catch (e) {
+        showToast('Network error while validating row.', 'error');
+    }
+}
+
+async function revalidateAllPreviewRows() {
+    if (!_currentPreviewData || !_currentPreviewData.preview_token) {
+        showToast('No active preview session.', 'error');
+        return;
+    }
+
+    showToast('Revalidating all rows against smart validation engine...', 'info');
+
+    try {
+        const res = await fetch('/api/complaints/import/revalidate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                preview_token: _currentPreviewData.preview_token,
+                rows: _previewRows
+            })
+        });
+        const result = await res.json();
+        if (res.ok && result.status === 'success' && result.data) {
+            const valids = (result.data.valid_rows || []).map(r => ({ ...r, _isValid: true, _dirty: false }));
+            const invalids = (result.data.invalid_rows || []).map(r => ({ ...r, _isValid: false, _dirty: false }));
+            _previewRows = [...valids, ...invalids].sort((a, b) => (a.row_number || 0) - (b.row_number || 0));
+
+            updatePreviewMetrics();
+            renderPreviewTable();
+            showToast(`Revalidation complete: ${valids.length} valid, ${invalids.length} rejected.`, 'success');
+        } else {
+            showToast(result.message || 'Revalidation failed.', 'error');
+        }
+    } catch (e) {
+        showToast('Network error while revalidating rows.', 'error');
+    }
+}
+
+function applyBulkField(field) {
+    let selectEl = null;
+    if (field === 'from_department') selectEl = document.getElementById('bulk-from-dept-select');
+    else if (field === 'status') selectEl = document.getElementById('bulk-status-select');
+    else if (field === 'priority') selectEl = document.getElementById('bulk-priority-select');
+
+    if (!selectEl) return;
+    const value = selectEl.value;
+
+    let targetRows = _previewRows;
+    if (_currentPreviewTab === 'valid') {
+        targetRows = targetRows.filter(r => r._isValid);
+    } else if (_currentPreviewTab === 'invalid') {
+        targetRows = targetRows.filter(r => !r._isValid);
+    }
+
+    if (targetRows.length === 0) {
+        showToast('No rows available to update in current tab.', 'warning');
+        return;
+    }
+
+    targetRows.forEach(r => {
+        r[field] = value;
+        r._dirty = true;
+    });
+
+    showToast(`Applied '${value}' to ${targetRows.length} rows. Revalidating...`, 'info');
+    revalidateAllPreviewRows();
+}
+
+async function commitExcelImport(importValidOnly = false) {
     if (!_currentPreviewData || !_currentPreviewData.preview_token) {
         showToast('No active preview session. Please upload your file again.', 'error');
         return;
     }
-    if ((_currentPreviewData.valid_count || 0) <= 0) {
-        showToast('There are no valid complaint rows to import.', 'error');
+
+    const validRows = _previewRows.filter(r => r._isValid);
+    if (validRows.length === 0) {
+        showToast('There are no valid complaint rows to import. Please correct errors first.', 'error');
         return;
     }
 
-    const commitBtn = document.getElementById('btn-commit-import');
-    const commitLabel = document.getElementById('btn-commit-label');
-    if (commitBtn) commitBtn.disabled = true;
-    if (commitLabel) commitLabel.textContent = 'Importing into Google Sheets...';
+    const btn = importValidOnly ? document.getElementById('btn-commit-valid-only') : document.getElementById('btn-commit-import');
+    const lbl = importValidOnly ? document.getElementById('btn-commit-valid-label') : document.getElementById('btn-commit-label');
+
+    if (btn) btn.disabled = true;
+    if (lbl) lbl.textContent = 'Importing to Google Sheets...';
 
     try {
         const res = await fetch('/api/complaints/import/commit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ preview_token: _currentPreviewData.preview_token })
+            body: JSON.stringify({
+                preview_token: _currentPreviewData.preview_token,
+                import_valid_only: importValidOnly,
+                rows: _previewRows
+            })
         });
         const result = await res.json();
 
@@ -6179,23 +6728,37 @@ async function commitExcelImport() {
         }
 
         showToast(result.message || `Successfully imported ${result.imported_count} complaints!`, 'success');
-        closeExcelImportModal();
 
-        // Refresh complaint lists and dashboards
+        if (importValidOnly && result.remaining_invalid && result.remaining_invalid.length > 0) {
+            // Keep remaining invalid rows in preview
+            const invalids = result.remaining_invalid.map(r => ({ ...r, _isValid: false, _dirty: false }));
+            _previewRows = invalids;
+            updatePreviewMetrics();
+            switchPreviewTab('invalid');
+            showToast(`${result.remaining_invalid.length} rejected rows remain in preview for correction.`, 'info');
+        } else {
+            closeExcelImportModal();
+        }
+
+        // Refresh complaint workspaces and dashboards
         if (typeof loadManageComplaints === 'function') loadManageComplaints();
         if (typeof loadMyComplaints === 'function') loadMyComplaints();
         if (typeof loadDashboardData === 'function') loadDashboardData();
     } catch (err) {
         console.error('Import commit error:', err);
         showToast(err.message || 'Import failed. Please try again.', 'error');
-        if (commitBtn) commitBtn.disabled = false;
-        if (commitLabel) commitLabel.textContent = `Import ${_currentPreviewData.valid_count} Valid Complaints`;
+        updatePreviewMetrics();
     }
 }
 
 function downloadExcelErrorReport() {
     if (!_currentPreviewData || !_currentPreviewData.preview_token) {
         showToast('No rejected rows available.', 'error');
+        return;
+    }
+    const invalidRows = _previewRows.filter(r => !r._isValid);
+    if (!invalidRows.length) {
+        showToast('There are no rejected rows.', 'info');
         return;
     }
     window.location.href = `/api/complaints/import/error-report?preview_token=${encodeURIComponent(_currentPreviewData.preview_token)}`;
