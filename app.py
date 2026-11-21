@@ -3424,14 +3424,14 @@ def _extract_report_filters(req_source):
         'salesperson_name', 'complain_types', 'category', 'customer_name',
         'customer_mobile_no', 'invoice_no', 'closing_start_date', 'closing_end_date',
         'gr_expected_start_date', 'gr_expected_end_date', 'gr_amount_min', 'gr_amount_max',
-        'overdue_only', 'search', 'from_department', 'from_dept'
+        'overdue_only', 'search'
     ]:
         val = req_source.get(k)
         if val is not None and str(val).strip() != '':
             filters[k] = str(val).strip()
 
     # List / Multi-value fields (support either list object, getlist, or comma-separated string)
-    for list_key in ['departments', 'vendors', 'statuses', 'priorities']:
+    for list_key in ['departments', 'vendors', 'statuses', 'priorities', 'from_department', 'from_departments', 'from_dept']:
         val = req_source.get(list_key)
         if hasattr(req_source, 'getlist'):
             multi = req_source.getlist(list_key)
@@ -3441,6 +3441,12 @@ def _extract_report_filters(req_source):
             filters[list_key] = [str(x).strip() for x in val if str(x).strip()]
         elif isinstance(val, str) and val.strip():
             filters[list_key] = [p.strip() for p in val.split(',') if p.strip()]
+
+    # Canonicalize from_department
+    if 'from_departments' in filters and 'from_department' not in filters:
+        filters['from_department'] = filters['from_departments']
+    if 'from_dept' in filters and 'from_department' not in filters:
+        filters['from_department'] = filters['from_dept']
 
     return filters
 
@@ -3493,6 +3499,31 @@ def get_reports_data():
             page_size=page_size
         )
 
+        # 6. Extract available master options for filter dropdowns directly from Google Sheets
+        all_avail_depts = set()
+        all_avail_vendors = set()
+        all_avail_from_depts = {'Online', 'Offline', 'Packing', 'None'}
+
+        for c in rbac_complaints:
+            d_raw = (c.get('Department Name') or c.get('Department') or '').strip()
+            if d_raw:
+                for p in d_raw.split(','):
+                    if p.strip():
+                        all_avail_depts.add(p.strip())
+            v_raw = (c.get('Vendor Name') or c.get('Vendor') or '').strip()
+            if v_raw and v_raw != '-' and v_raw.lower() != 'none':
+                all_avail_vendors.add(v_raw)
+            fd_raw = (c.get('From Department') or c.get('from_department') or '').strip()
+            if fd_raw:
+                all_avail_from_depts.add(fd_raw.capitalize())
+
+        try:
+            for d in db.get_all_departments(include_inactive=False):
+                if d.get('Name'):
+                    all_avail_depts.add(d['Name'].strip())
+        except Exception:
+            pass
+
         return jsonify({
             'status': 'success',
             'records': paged_records,
@@ -3509,7 +3540,10 @@ def get_reports_data():
             'top_vendors': aggregations['top_vendors'],
             'monthly_trend': aggregations['monthly_trend'],
             'employee_performance': aggregations['employee_performance'],
-            'available_columns': ALL_REPORT_COLUMNS
+            'available_columns': ALL_REPORT_COLUMNS,
+            'available_departments': sorted(list(all_avail_depts)),
+            'available_vendors': sorted(list(all_avail_vendors)),
+            'available_from_departments': sorted(list(all_avail_from_depts))
         })
     except Exception as e:
         logger.error(f"Error compiling reports data: {e}", exc_info=True)

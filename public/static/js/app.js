@@ -1055,9 +1055,10 @@ function copyRedirectUri(elementId) {
 // MULTI-SELECT DEPARTMENT DROPDOWN LOGIC
 // =============================================================================
 
-function toggleMultiSelect(prefix) {
-    const dropdown = document.getElementById(`${prefix}-dept-dropdown`);
-    const container = document.getElementById(`${prefix}-dept-multi-select`);
+function toggleMultiSelect(prefix, event) {
+    if (event) event.stopPropagation();
+    let dropdown = document.getElementById(`${prefix}-dropdown`) || document.getElementById(`${prefix}-dept-dropdown`);
+    let container = document.getElementById(`${prefix}-multi-select`) || document.getElementById(`${prefix}-dept-multi-select`);
     if (!dropdown || !container) return;
 
     const isVisible = dropdown.style.display !== 'none';
@@ -1065,10 +1066,13 @@ function toggleMultiSelect(prefix) {
     if (!isVisible) {
         dropdown.style.display = 'flex';
         container.classList.add('open');
-        const searchInput = document.getElementById(`${prefix}-dept-search`);
+        const searchInput = document.getElementById(`${prefix}-search`) || document.getElementById(`${prefix}-dept-search`);
         if (searchInput) {
             searchInput.value = '';
-            filterMultiSelectOptions(prefix);
+            if (prefix === 'report-dept') filterReportDeptOptions();
+            else if (prefix === 'report-vendor') filterReportVendorOptions();
+            else if (prefix === 'report-from-dept') filterReportFromDeptOptions();
+            else filterMultiSelectOptions(prefix);
             searchInput.focus();
         }
     }
@@ -1084,8 +1088,8 @@ function closeAllMultiSelects() {
 }
 
 function filterMultiSelectOptions(prefix) {
-    const searchVal = (document.getElementById(`${prefix}-dept-search`)?.value || '').toLowerCase().trim();
-    const container = document.getElementById(`${prefix}-dept-options`);
+    const searchVal = (document.getElementById(`${prefix}-search`) || document.getElementById(`${prefix}-dept-search`))?.value.toLowerCase().trim() || '';
+    const container = document.getElementById(`${prefix}-options`) || document.getElementById(`${prefix}-dept-options`);
     if (!container) return;
     const options = container.querySelectorAll('.multi-select-option');
     options.forEach(opt => {
@@ -1113,6 +1117,10 @@ function onDeptCheckboxChange(prefix) {
 }
 
 function selectAllDepartments(prefix) {
+    if (prefix === 'report-dept') {
+        selectAllReportDepts();
+        return;
+    }
     const container = document.getElementById(`${prefix}-dept-options`);
     if (!container) return;
     const checkboxes = container.querySelectorAll('.multi-select-option:not([style*="display: none"]) input[type="checkbox"]');
@@ -1121,6 +1129,10 @@ function selectAllDepartments(prefix) {
 }
 
 function clearAllDepartments(prefix) {
+    if (prefix === 'report-dept') {
+        clearAllReportDepts();
+        return;
+    }
     const container = document.getElementById(`${prefix}-dept-options`);
     if (!container) return;
     const checkboxes = container.querySelectorAll('input[type="checkbox"]');
@@ -1234,6 +1246,10 @@ function populateDepartmentDropdowns() {
             updateMultiSelectLabel(prefix, []);
         }
     });
+
+    if (typeof populateReportDepartmentFilter === 'function') {
+        populateReportDepartmentFilter();
+    }
 }
 
 // =============================================================================
@@ -1864,6 +1880,13 @@ function populateGlobalFilterOptions(records) {
     fillDatalist('manage-type-datalist', typesSet);
     fillDatalist('my-handled-datalist', handlersSet);
     fillDatalist('manage-handled-datalist', handlersSet);
+
+    if (typeof populateReportVendorFilter === 'function') {
+        populateReportVendorFilter();
+    }
+    if (typeof populateReportDepartmentFilter === 'function') {
+        populateReportDepartmentFilter();
+    }
 }
 
 /**
@@ -4806,6 +4829,7 @@ let reportsState = {
         end_date: '',
         departments: [],
         vendors: [],
+        from_departments: [],
         statuses: [],
         priorities: [],
         handled_by: '',
@@ -4837,36 +4861,88 @@ let reportsState = {
 };
 
 async function initReportsView() {
-    // 1. Populate multi-select department filter
+    // 1. Populate multi-select filters
     populateReportDepartmentFilter();
-
-    // 2. Populate vendor filter options from cache
     populateReportVendorFilter();
+    populateReportFromDeptFilter();
 
-    // 3. Load saved configuration if exists
+    // 2. Load saved configuration if exists
     loadSavedReportConfiguration();
 
-    // 4. Fetch initial report data
+    // 3. Fetch initial report data
     await loadReportsData();
 }
 
-function populateReportDepartmentFilter() {
+function toggleReportMultiSelect(id, event) {
+    if (event) event.stopPropagation();
+    const dropdown = document.getElementById(`${id}-dropdown`);
+    const container = document.getElementById(`${id}-multi-select`);
+    if (!dropdown || !container) return;
+
+    const isVisible = dropdown.style.display !== 'none';
+    closeAllMultiSelects();
+    if (!isVisible) {
+        dropdown.style.display = 'flex';
+        container.classList.add('open');
+        const searchInput = document.getElementById(`${id}-search`);
+        if (searchInput) {
+            searchInput.value = '';
+            if (id === 'report-dept') filterReportDeptOptions();
+            else if (id === 'report-vendor') filterReportVendorOptions();
+            else if (id === 'report-from-dept') filterReportFromDeptOptions();
+            searchInput.focus();
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Report Department Filter (Multi-select)
+// -----------------------------------------------------------------------------
+
+function populateReportDepartmentFilter(availableDepts = null) {
     const container = document.getElementById('report-dept-options');
     if (!container) return;
 
-    if (!currentDepartments.length) {
+    const deptSet = new Set();
+    if (Array.isArray(availableDepts) && availableDepts.length > 0) {
+        availableDepts.forEach(d => { if (d && d.trim()) deptSet.add(d.trim()); });
+    }
+    if (Array.isArray(currentDepartments)) {
+        currentDepartments.forEach(d => {
+            const name = (typeof d === 'string' ? d : d?.Name || '').trim();
+            if (name) deptSet.add(name);
+        });
+    }
+    if (Array.isArray(allComplaintsCache)) {
+        allComplaintsCache.forEach(c => {
+            const raw = (c['Department Name'] || c.Department || '').trim();
+            if (raw) {
+                raw.split(',').forEach(p => {
+                    const clean = p.trim();
+                    if (clean) deptSet.add(clean);
+                });
+            }
+        });
+    }
+
+    const depts = Array.from(deptSet).sort((a, b) => a.localeCompare(b));
+    if (!depts.length) {
         container.innerHTML = '<div class="text-muted p-2" style="font-size: 0.85rem;">No departments configured.</div>';
         return;
     }
 
-    container.innerHTML = currentDepartments.map(d => `
-        <label class="multi-select-option" data-name="${escapeHtml(d.Name).toLowerCase()}">
-            <input type="checkbox" value="${escapeHtml(d.Name)}" onchange="onReportDeptCheckboxChange()">
-            <span class="option-label">${escapeHtml(d.Name)}</span>
-        </label>
-    `).join('');
+    const currentSelected = reportsState.filters.departments || [];
+    container.innerHTML = depts.map(d => {
+        const isChecked = currentSelected.some(s => s.toLowerCase() === d.toLowerCase());
+        return `
+            <label class="multi-select-option" data-name="${escapeHtml(d).toLowerCase()}">
+                <input type="checkbox" value="${escapeHtml(d)}" ${isChecked ? 'checked' : ''} onchange="onReportDeptCheckboxChange()">
+                <span class="option-label">${escapeHtml(d)}</span>
+            </label>
+        `;
+    }).join('');
 
-    updateReportDeptFilterLabel([]);
+    updateReportDeptFilterLabel(currentSelected);
 }
 
 function onReportDeptCheckboxChange() {
@@ -4874,6 +4950,8 @@ function onReportDeptCheckboxChange() {
     if (!container) return;
     const checked = Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value.trim());
     reportsState.filters.departments = checked;
+    const hidden = document.getElementById('report-filter-departments');
+    if (hidden) hidden.value = checked.join(',');
     updateReportDeptFilterLabel(checked);
 }
 
@@ -4891,31 +4969,66 @@ function updateReportDeptFilterLabel(selected) {
     }
 }
 
-function populateReportVendorFilter() {
+function selectAllReportDepts() {
+    const container = document.getElementById('report-dept-options');
+    if (!container) return;
+    container.querySelectorAll('.multi-select-option:not([style*="display: none"]) input[type="checkbox"]').forEach(cb => { cb.checked = true; });
+    onReportDeptCheckboxChange();
+}
+
+function clearAllReportDepts() {
+    const container = document.getElementById('report-dept-options');
+    if (!container) return;
+    container.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+    onReportDeptCheckboxChange();
+}
+
+function filterReportDeptOptions() {
+    const q = (document.getElementById('report-dept-search')?.value || '').toLowerCase().trim();
+    const options = document.querySelectorAll('#report-dept-options .multi-select-option');
+    options.forEach(opt => {
+        const name = opt.getAttribute('data-name') || '';
+        opt.style.display = (!q || name.includes(q)) ? 'flex' : 'none';
+    });
+}
+
+// -----------------------------------------------------------------------------
+// Report Vendor Filter (Multi-select)
+// -----------------------------------------------------------------------------
+
+function populateReportVendorFilter(availableVendors = null) {
     const container = document.getElementById('report-vendor-options');
     if (!container) return;
 
-    // Extract unique vendors from allComplaintsCache
     const vendorSet = new Set();
-    allComplaintsCache.forEach(c => {
-        const v = (c['Vendor Name'] || '').trim();
-        if (v) vendorSet.add(v);
-    });
+    if (Array.isArray(availableVendors) && availableVendors.length > 0) {
+        availableVendors.forEach(v => { if (v && v.trim()) vendorSet.add(v.trim()); });
+    }
+    if (Array.isArray(allComplaintsCache)) {
+        allComplaintsCache.forEach(c => {
+            const v = (c['Vendor Name'] || c.Vendor || '').trim();
+            if (v && v !== '-' && v.toLowerCase() !== 'none') vendorSet.add(v);
+        });
+    }
 
-    const vendors = Array.from(vendorSet).sort();
+    const vendors = Array.from(vendorSet).sort((a, b) => a.localeCompare(b));
     if (!vendors.length) {
         container.innerHTML = '<div class="text-muted p-2" style="font-size: 0.85rem;">No vendors recorded yet.</div>';
         return;
     }
 
-    container.innerHTML = vendors.map(v => `
-        <label class="multi-select-option" data-name="${escapeHtml(v).toLowerCase()}">
-            <input type="checkbox" value="${escapeHtml(v)}" onchange="onReportVendorCheckboxChange()">
-            <span class="option-label">${escapeHtml(v)}</span>
-        </label>
-    `).join('');
+    const currentSelected = reportsState.filters.vendors || [];
+    container.innerHTML = vendors.map(v => {
+        const isChecked = currentSelected.some(s => s.toLowerCase() === v.toLowerCase());
+        return `
+            <label class="multi-select-option" data-name="${escapeHtml(v).toLowerCase()}">
+                <input type="checkbox" value="${escapeHtml(v)}" ${isChecked ? 'checked' : ''} onchange="onReportVendorCheckboxChange()">
+                <span class="option-label">${escapeHtml(v)}</span>
+            </label>
+        `;
+    }).join('');
 
-    updateReportVendorFilterLabel([]);
+    updateReportVendorFilterLabel(currentSelected);
 }
 
 function onReportVendorCheckboxChange() {
@@ -4923,6 +5036,8 @@ function onReportVendorCheckboxChange() {
     if (!container) return;
     const checked = Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value.trim());
     reportsState.filters.vendors = checked;
+    const hidden = document.getElementById('report-filter-vendors');
+    if (hidden) hidden.value = checked.join(',');
     updateReportVendorFilterLabel(checked);
 }
 
@@ -4933,28 +5048,113 @@ function updateReportVendorFilterLabel(selected) {
         labelEl.textContent = 'All Vendors';
     } else if (selected.length === 1) {
         labelEl.innerHTML = `<span class="multi-select-chip">${escapeHtml(selected[0])}</span>`;
+    } else if (selected.length <= 2) {
+        labelEl.innerHTML = selected.map(s => `<span class="multi-select-chip">${escapeHtml(s)}</span>`).join('');
     } else {
         labelEl.innerHTML = `<span class="multi-select-chip">${escapeHtml(selected[0])}</span> <span class="multi-select-chip">+${selected.length - 1} more</span>`;
     }
 }
 
-function selectAllVendors() {
+function selectAllReportVendors() {
     const container = document.getElementById('report-vendor-options');
     if (!container) return;
-    container.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
+    container.querySelectorAll('.multi-select-option:not([style*="display: none"]) input[type="checkbox"]').forEach(cb => { cb.checked = true; });
     onReportVendorCheckboxChange();
 }
 
-function clearAllVendors() {
+function clearAllReportVendors() {
     const container = document.getElementById('report-vendor-options');
     if (!container) return;
     container.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
     onReportVendorCheckboxChange();
 }
 
-function filterVendorOptions() {
+function filterReportVendorOptions() {
     const q = (document.getElementById('report-vendor-search')?.value || '').toLowerCase().trim();
     const options = document.querySelectorAll('#report-vendor-options .multi-select-option');
+    options.forEach(opt => {
+        const name = opt.getAttribute('data-name') || '';
+        opt.style.display = (!q || name.includes(q)) ? 'flex' : 'none';
+    });
+}
+
+// -----------------------------------------------------------------------------
+// Report From Department Filter (Multi-select)
+// -----------------------------------------------------------------------------
+
+function populateReportFromDeptFilter(availableFromDepts = null) {
+    const container = document.getElementById('report-from-dept-options');
+    if (!container) return;
+
+    const canonical = ['Online', 'Offline', 'Packing', 'None'];
+    const fromDeptSet = new Set(canonical);
+    if (Array.isArray(availableFromDepts) && availableFromDepts.length > 0) {
+        availableFromDepts.forEach(fd => {
+            if (fd && fd.trim()) {
+                const clean = fd.trim();
+                const matched = canonical.find(c => c.toLowerCase() === clean.toLowerCase()) || clean;
+                fromDeptSet.add(matched);
+            }
+        });
+    }
+
+    const options = Array.from(fromDeptSet);
+    const currentSelected = reportsState.filters.from_departments || [];
+
+    container.innerHTML = options.map(opt => {
+        const isChecked = currentSelected.some(s => s.toLowerCase() === opt.toLowerCase());
+        return `
+            <label class="multi-select-option" data-name="${escapeHtml(opt).toLowerCase()}">
+                <input type="checkbox" value="${escapeHtml(opt)}" ${isChecked ? 'checked' : ''} onchange="onReportFromDeptCheckboxChange()">
+                <span class="option-label">${escapeHtml(opt)}</span>
+            </label>
+        `;
+    }).join('');
+
+    updateReportFromDeptFilterLabel(currentSelected);
+}
+
+function onReportFromDeptCheckboxChange() {
+    const container = document.getElementById('report-from-dept-options');
+    if (!container) return;
+    const checked = Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value.trim());
+    reportsState.filters.from_departments = checked;
+    const hidden = document.getElementById('report-filter-from-departments');
+    if (hidden) hidden.value = checked.join(',');
+    updateReportFromDeptFilterLabel(checked);
+}
+
+function updateReportFromDeptFilterLabel(selected) {
+    const labelEl = document.getElementById('report-from-dept-label');
+    if (!labelEl) return;
+    if (!selected || selected.length === 0) {
+        labelEl.textContent = 'All From Depts';
+    } else if (selected.length === 1) {
+        labelEl.innerHTML = `<span class="multi-select-chip">${escapeHtml(selected[0])}</span>`;
+    } else if (selected.length <= 2) {
+        labelEl.innerHTML = selected.map(s => `<span class="multi-select-chip">${escapeHtml(s)}</span>`).join('');
+    } else {
+        labelEl.innerHTML = `<span class="multi-select-chip">${escapeHtml(selected[0])}</span> <span class="multi-select-chip">+${selected.length - 1} more</span>`;
+    }
+}
+
+function selectAllReportFromDepts() {
+    const container = document.getElementById('report-from-dept-options');
+    if (!container) return;
+    container.querySelectorAll('.multi-select-option:not([style*="display: none"]) input[type="checkbox"]').forEach(cb => { cb.checked = true; });
+    onReportFromDeptCheckboxChange();
+}
+
+function clearAllReportFromDepts() {
+    const container = document.getElementById('report-from-dept-options');
+    if (!container) return;
+    container.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+    onReportFromDeptCheckboxChange();
+}
+
+function filterReportFromDeptOptions() {
+    const q = (document.getElementById('report-from-dept-search')?.value || '').toLowerCase().trim();
+    const options = document.querySelectorAll('#report-from-dept-options .multi-select-option');
     options.forEach(opt => {
         const name = opt.getAttribute('data-name') || '';
         opt.style.display = (!q || name.includes(q)) ? 'flex' : 'none';
@@ -4980,6 +5180,7 @@ async function loadReportsData() {
     if (f.end_date) params.append('end_date', f.end_date);
     if (f.departments && f.departments.length) params.append('departments', f.departments.join(','));
     if (f.vendors && f.vendors.length) params.append('vendors', f.vendors.join(','));
+    if (f.from_departments && f.from_departments.length) params.append('from_department', f.from_departments.join(','));
     if (f.statuses && f.statuses.length) params.append('statuses', f.statuses.join(','));
     if (f.priorities && f.priorities.length) params.append('priorities', f.priorities.join(','));
     if (f.handled_by) params.append('handled_by', f.handled_by);
@@ -5018,6 +5219,17 @@ async function loadReportsData() {
             initReportColumnPicker(data.available_columns);
         }
 
+        // Dynamically populate dropdown options from backend Google Sheets master data
+        if (data.available_departments && data.available_departments.length) {
+            populateReportDepartmentFilter(data.available_departments);
+        }
+        if (data.available_vendors && data.available_vendors.length) {
+            populateReportVendorFilter(data.available_vendors);
+        }
+        if (data.available_from_departments && data.available_from_departments.length) {
+            populateReportFromDeptFilter(data.available_from_departments);
+        }
+
         // Render all UI components
         updateReportActiveFilterBadge();
         renderReportKpis(data.kpis);
@@ -5048,6 +5260,9 @@ function updateReportActiveFilterBadge() {
     }
     if (f.vendors && f.vendors.length) {
         parts.push(`Vendors (${f.vendors.length})`);
+    }
+    if (f.from_departments && f.from_departments.length) {
+        parts.push(`From Dept: ${f.from_departments.join(', ')}`);
     }
     if (f.statuses && f.statuses.length) {
         parts.push(`Status: ${f.statuses.join(', ')}`);
@@ -5677,13 +5892,29 @@ function applyReportPreset(preset) {
 // =============================================================================
 
 function handleApplyReportFilters(e) {
-    e.preventDefault();
+    if (e) e.preventDefault();
 
     const f = reportsState.filters;
     f.date_preset = document.getElementById('report-filter-date-preset')?.value || 'all';
     f.start_date = document.getElementById('report-filter-start-date')?.value || '';
     f.end_date = document.getElementById('report-filter-end-date')?.value || '';
     f.search = (document.getElementById('report-filter-search')?.value || '').trim();
+
+    // Multi-select sync from checkboxes
+    const deptChecked = Array.from(document.querySelectorAll('#report-dept-options input[type="checkbox"]:checked')).map(cb => cb.value.trim());
+    f.departments = deptChecked;
+    const hiddenDept = document.getElementById('report-filter-departments');
+    if (hiddenDept) hiddenDept.value = deptChecked.join(',');
+
+    const vendorChecked = Array.from(document.querySelectorAll('#report-vendor-options input[type="checkbox"]:checked')).map(cb => cb.value.trim());
+    f.vendors = vendorChecked;
+    const hiddenVendor = document.getElementById('report-filter-vendors');
+    if (hiddenVendor) hiddenVendor.value = vendorChecked.join(',');
+
+    const fromDeptChecked = Array.from(document.querySelectorAll('#report-from-dept-options input[type="checkbox"]:checked')).map(cb => cb.value.trim());
+    f.from_departments = fromDeptChecked;
+    const hiddenFromDept = document.getElementById('report-filter-from-departments');
+    if (hiddenFromDept) hiddenFromDept.value = fromDeptChecked.join(',');
 
     const statusVal = document.getElementById('report-filter-status')?.value || '';
     f.statuses = statusVal ? [statusVal] : [];
@@ -5713,6 +5944,7 @@ function resetReportFilters() {
         end_date: '',
         departments: [],
         vendors: [],
+        from_departments: [],
         statuses: [],
         priorities: [],
         handled_by: '',
@@ -5730,8 +5962,20 @@ function resetReportFilters() {
     const form = document.getElementById('report-filter-form');
     if (form) form.reset();
 
-    clearAllDepartments('report-dept');
-    clearAllVendors();
+    clearAllReportDepts();
+    clearAllReportVendors();
+    clearAllReportFromDepts();
+
+    const hiddenDept = document.getElementById('report-filter-departments');
+    if (hiddenDept) hiddenDept.value = '';
+    const hiddenVendor = document.getElementById('report-filter-vendors');
+    if (hiddenVendor) hiddenVendor.value = '';
+    const hiddenFromDept = document.getElementById('report-filter-from-departments');
+    if (hiddenFromDept) hiddenFromDept.value = '';
+
+    updateReportDeptFilterLabel([]);
+    updateReportVendorFilterLabel([]);
+    updateReportFromDeptFilterLabel([]);
 
     reportsState.page = 1;
     loadReportsData();

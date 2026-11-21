@@ -240,7 +240,7 @@ class ReportService:
             end_date = today.replace(month=12, day=31)
 
         # 2. Multi-Department Filter
-        selected_depts = filters.get('departments')
+        selected_depts = filters.get('departments') or filters.get('department')
         if isinstance(selected_depts, str):
             selected_depts = [p.strip().lower() for p in selected_depts.split(',') if p.strip()]
         elif isinstance(selected_depts, (list, tuple)):
@@ -253,7 +253,7 @@ class ReportService:
         year_filter = (filters.get('year') or '').strip()
 
         # From Department Filter
-        from_dept_filter = filters.get('from_department') or filters.get('from_dept')
+        from_dept_filter = filters.get('from_department') or filters.get('from_departments') or filters.get('from_dept')
         if isinstance(from_dept_filter, str):
             selected_from_depts = [p.strip().lower() for p in from_dept_filter.split(',') if p.strip()]
         elif isinstance(from_dept_filter, (list, tuple)):
@@ -262,7 +262,7 @@ class ReportService:
             selected_from_depts = []
 
         # 3. Multi-Vendor Filter
-        selected_vendors = filters.get('vendors')
+        selected_vendors = filters.get('vendors') or filters.get('vendor')
         if isinstance(selected_vendors, str):
             selected_vendors = [p.strip().lower() for p in selected_vendors.split(',') if p.strip()]
         elif isinstance(selected_vendors, (list, tuple)):
@@ -345,17 +345,17 @@ class ReportService:
                     continue
 
             # Departments filter (checks multi-department comma strings)
-            if selected_depts:
+            if selected_depts and 'all' not in selected_depts:
                 c_dept_raw = (c.get('Department Name') or c.get('Department') or '').lower()
                 c_depts = [p.strip() for p in c_dept_raw.split(',') if p.strip()]
                 # Match if any selected department is tagged in this complaint
-                if not any(sd in c_depts or any(sd in cd for cd in c_depts) for sd in selected_depts):
+                if not any(sd in c_depts or any(sd == cd or sd in cd or cd in sd for cd in c_depts) for sd in selected_depts):
                     continue
 
             # Vendors filter
-            if selected_vendors:
-                v_name = (c.get('Vendor Name') or '').lower().strip()
-                if not any(sv in v_name for sv in selected_vendors):
+            if selected_vendors and 'all' not in selected_vendors:
+                v_name = (c.get('Vendor Name') or c.get('Vendor') or '').lower().strip()
+                if not any(sv == v_name or sv in v_name or v_name in sv for sv in selected_vendors if v_name):
                     continue
 
             # Status filter
@@ -495,7 +495,7 @@ class ReportService:
                 dept_counts[d] += 1
 
             # Vendor breakdown
-            vendor = (c.get('Vendor Name') or 'Unspecified').strip()
+            vendor = (c.get('Vendor Name') or c.get('Vendor') or 'Unspecified').strip()
             vendor_counts[vendor]['count'] += 1
             vendor_counts[vendor]['gr_amount'] += gr_val
 
