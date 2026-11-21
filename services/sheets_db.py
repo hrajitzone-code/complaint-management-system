@@ -93,6 +93,17 @@ SHEET_SCHEMAS = {
     ],
     'System_Config': [
         'Key', 'Value', 'Updated_At', 'Updated_By'
+    ],
+    'Deleted_Complaints_Backup': [
+        'Backup ID', 'Deleted At', 'Deleted By Name', 'Deleted By Email', 'Deleted By Role',
+        'Complain Date Year', 'Batch Reason', 'Restored Status',
+        'Complaint ID', 'Timestamp', 'Complainant Email', 'Employee Name',
+        'Complain Date', 'Customer Name', 'Invoice No.', 'Complain Types',
+        'Priority', 'Remarks', 'Complain Details', 'Customer Mobile No.',
+        'Department Name', 'Category', 'Vendor Name', 'Salesperson Name',
+        'Status', 'Closing Date', 'Solution Given', 'Handled By',
+        'Total Time Taken', 'Comments', 'GR Amount', 'GR Expected Date',
+        'Attachment Link', 'Last Updated At', 'From Department'
     ]
 }
 
@@ -2212,6 +2223,259 @@ class SheetsDB:
             execute_with_retry(lambda: ws.delete_rows(found_row))
             cls._invalidate_cache('Complaints')
             return True
+
+    @classmethod
+    def bulk_delete_complaints(cls, complaint_ids, deleted_by_user, reason='Super Admin Bulk Delete', year=None):
+        from services.report_service import ReportService
+        """
+        Atomically bulk deletes specified complaint records from Complaints worksheet.
+        Safety Requirements:
+        1. Backs up every deleted record to 'Deleted_Complaints_Backup' worksheet with full metadata
+           before removing from active records.
+        2. Strictly verifies 'Complain Date' year matches the requested year filter if provided.
+        3. Preserves all other years and non-targeted records.
+        4. Appends audit history entries to 'Status History' and 'Audit_Logs'.
+        5. Invalidates database cache.
+        """
+        target_ids = {str(cid).strip() for cid in complaint_ids if str(cid).strip()}
+        if not target_ids:
+            return {'status': 'success', 'deleted_count': 0, 'backup_id': None, 'deleted_ids': []}
+
+        with cls._db_lock:
+            ws = cls._get_worksheet('Complaints')
+            rows = execute_with_retry(lambda: ws.get_all_values())
+            if not rows or len(rows) < 2:
+                raise ValueError("No complaints found in database.")
+
+            headers = [h.strip() for h in rows[0]]
+            id_idx = headers.index('Complaint ID') if 'Complaint ID' in headers else 0
+            date_idx = headers.index('Complain Date') if 'Complain Date' in headers else -1
+
+            keep_rows = [rows[0]]
+            deleted_raw_rows = []
+            deleted_ids = []
+
+            for r in rows[1:]:
+                c_id = r[id_idx].strip() if len(r) > id_idx else ''
+                if c_id in target_ids:
+                    # CRITICAL: Verify Complain Date year matches requested year
+                    if year and str(year).strip().upper() != 'ALL':
+                        c_date_val = r[date_idx].strip() if (date_idx >= 0 and len(r) > date_idx) else ''
+                        parsed_dt = ReportService.parse_date(c_date_val)
+                        if parsed_dt and str(parsed_dt.year) != str(year).strip():
+                            # Belongs to a different year; do not delete!
+                            keep_rows.append(r)
+                            continue
+
+                    deleted_raw_rows.append(r)
+                    deleted_ids.append(c_id)
+                else:
+                    keep_rows.append(r)
+
+            if not deleted_raw_rows:
+                raise ValueError("No matching complaints found for the specified criteria.")
+
+            # Create Backup Entry in Deleted_Complaints_Backup
+            backup_id = f"BAK-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
+            now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            user_name = deleted_by_user.get('name') or deleted_by_user.get('Full Name') or 'Super Admin'
+            user_email = deleted_by_user.get('email') or deleted_by_user.get('Email') or ''
+            user_role = deleted_by_user.get('role') or deleted_by_user.get('Role') or 'Super Admin'
+
+            # Ensure Deleted_Complaints_Backup worksheet exists
+            backup_ws = cls._get_worksheet('Deleted_Complaints_Backup')
+            backup_headers = execute_with_retry(lambda: backup_ws.row_values(1))
+            if not backup_headers:
+                backup_headers = SHEET_SCHEMAS['Deleted_Complaints_Backup']
+                execute_with_retry(lambda: backup_ws.append_row(sanitize_row(backup_headers), value_input_option='USER_ENTERED'))
+
+            backup_meta_cols = [
+                backup_id, now_str, user_name, user_email, user_role,
+                str(year or ''), reason or 'Super Admin bulk delete', 'ACTIVE_BACKUP'
+            ]
+            backup_rows = []
+            for r in deleted_raw_rows:
+                padded_r = r + [''] * max(0, len(SHEET_SCHEMAS['Complaints']) - len(r))
+                backup_rows.append(sanitize_row(backup_meta_cols + padded_r[:len(SHEET_SCHEMAS['Complaints'])]))
+
+            execute_with_retry(lambda: backup_ws.append_rows(backup_rows, value_input_option='USER_ENTERED'))
+
+            # Atomically update Complaints sheet (clear + update keeps all headers and non-deleted rows)
+            execute_with_retry(lambda: ws.clear())
+            execute_with_retry(lambda: ws.update('A1', [sanitize_row(kr) for kr in keep_rows], value_input_option='USER_ENTERED'))
+            cls._invalidate_cache('Complaints')
+
+            # Append to Status History
+            try:
+                hist_ws = cls._get_worksheet('Status History')
+                hist_rows = []
+                for cid in deleted_ids:
+                    hist_id = f"HIST-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
+                    hist_rows.append(sanitize_row([
+                        hist_id, cid, now_str, 'ACTIVE', 'DELETED',
+                        user_name, user_email, f"Bulk deleted by Super Admin (Backup: {backup_id}, Year: {year or 'All'})"
+                    ]))
+                execute_with_retry(lambda: hist_ws.append_rows(hist_rows, value_input_option='USER_ENTERED'))
+                cls._invalidate_cache('Status History')
+            except Exception as h_err:
+                logger.warning(f"Could not record bulk delete in Status History: {h_err}")
+
+            # Record in Audit_Logs
+            try:
+                cls.log_audit_event(
+                    user_id=deleted_by_user.get('user_id'),
+                    user_email=user_email,
+                    user_role=user_role,
+                    action='BULK_COMPLAINT_DELETE',
+                    module='COMPLAINTS',
+                    record_id=backup_id,
+                    details=f"Super Admin bulk deleted {len(deleted_ids)} complaints (Year: {year or 'All'}). Backup ID: {backup_id}. IDs: {', '.join(deleted_ids[:15])}{'...' if len(deleted_ids) > 15 else ''}",
+                    result='SUCCESS'
+                )
+            except Exception as a_err:
+                logger.warning(f"Could not record bulk delete in Audit_Logs: {a_err}")
+
+            return {
+                'status': 'success',
+                'backup_id': backup_id,
+                'deleted_count': len(deleted_ids),
+                'deleted_ids': deleted_ids,
+                'year': year,
+                'timestamp': now_str
+            }
+
+    @classmethod
+    def restore_bulk_deleted_complaints(cls, backup_id, restored_by_user):
+        """
+        Recovers and restores complaints from a backup in 'Deleted_Complaints_Backup'
+        back into the active Complaints worksheet.
+        """
+        clean_backup_id = str(backup_id).strip()
+        if not clean_backup_id:
+            raise ValueError("Invalid backup ID provided.")
+
+        with cls._db_lock:
+            backup_ws = cls._get_worksheet('Deleted_Complaints_Backup')
+            b_rows = execute_with_retry(lambda: backup_ws.get_all_values())
+            if not b_rows or len(b_rows) < 2:
+                raise ValueError("No backups found in system.")
+
+            b_headers = [h.strip() for h in b_rows[0]]
+            b_id_idx = b_headers.index('Backup ID') if 'Backup ID' in b_headers else 0
+            b_status_idx = b_headers.index('Restored Status') if 'Restored Status' in b_headers else 7
+            meta_len = 8
+
+            matched_rows = []
+            matched_indices = []
+            for idx, r in enumerate(b_rows[1:], start=2):
+                if len(r) > b_id_idx and r[b_id_idx].strip() == clean_backup_id:
+                    matched_rows.append(r)
+                    matched_indices.append(idx)
+
+            if not matched_rows:
+                raise ValueError(f"Backup '{clean_backup_id}' not found.")
+
+            # Extract complaint records
+            restored_complaints = []
+            restored_ids = []
+            comp_headers = SHEET_SCHEMAS['Complaints']
+            comp_id_idx_in_comp = comp_headers.index('Complaint ID')
+
+            for r in matched_rows:
+                comp_data = r[meta_len:meta_len + len(comp_headers)]
+                if len(comp_data) > comp_id_idx_in_comp and comp_data[comp_id_idx_in_comp].strip():
+                    restored_complaints.append(comp_data)
+                    restored_ids.append(comp_data[comp_id_idx_in_comp].strip())
+
+            if not restored_complaints:
+                raise ValueError("No complaint data found in this backup.")
+
+            # Append restored records to Complaints worksheet
+            comp_ws = cls._get_worksheet('Complaints')
+            curr_comp_rows = execute_with_retry(lambda: comp_ws.get_all_values())
+            existing_ids = set()
+            if curr_comp_rows and len(curr_comp_rows) > 1:
+                c_head = [h.strip() for h in curr_comp_rows[0]]
+                cid_idx = c_head.index('Complaint ID') if 'Complaint ID' in c_head else 0
+                for cr in curr_comp_rows[1:]:
+                    if len(cr) > cid_idx:
+                        existing_ids.add(cr[cid_idx].strip())
+
+            to_append = []
+            for c_row in restored_complaints:
+                cid = c_row[comp_id_idx_in_comp].strip()
+                if cid not in existing_ids:
+                    to_append.append(sanitize_row(c_row))
+
+            if to_append:
+                execute_with_retry(lambda: comp_ws.append_rows(to_append, value_input_option='USER_ENTERED'))
+                cls._invalidate_cache('Complaints')
+
+            # Mark rows in Deleted_Complaints_Backup as RESTORED
+            for r_idx in matched_indices:
+                col_letter = gspread.utils.rowcol_to_a1(r_idx, b_status_idx + 1)
+                execute_with_retry(lambda cl=col_letter: backup_ws.update(cl, [['RESTORED']], value_input_option='USER_ENTERED'))
+
+            now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            user_name = restored_by_user.get('name') or restored_by_user.get('Full Name') or 'Super Admin'
+            user_email = restored_by_user.get('email') or restored_by_user.get('Email') or ''
+
+            try:
+                cls.log_audit_event(
+                    user_id=restored_by_user.get('user_id'),
+                    user_email=user_email,
+                    user_role=restored_by_user.get('role') or 'Super Admin',
+                    action='BULK_COMPLAINT_RESTORE',
+                    module='COMPLAINTS',
+                    record_id=clean_backup_id,
+                    details=f"Super Admin restored {len(restored_ids)} complaints from backup {clean_backup_id}.",
+                    result='SUCCESS'
+                )
+            except Exception as a_err:
+                logger.warning(f"Could not record restore in Audit_Logs: {a_err}")
+
+            return {
+                'status': 'success',
+                'backup_id': clean_backup_id,
+                'restored_count': len(restored_ids),
+                'restored_ids': restored_ids
+            }
+
+    @classmethod
+    def get_bulk_delete_backups(cls):
+        """Returns summary list of all bulk deletion backups."""
+        with cls._db_lock:
+            backup_ws = cls._get_worksheet('Deleted_Complaints_Backup')
+            b_rows = execute_with_retry(lambda: backup_ws.get_all_values())
+            if not b_rows or len(b_rows) < 2:
+                return []
+
+            b_headers = [h.strip() for h in b_rows[0]]
+            b_id_idx = b_headers.index('Backup ID') if 'Backup ID' in b_headers else 0
+            date_idx = b_headers.index('Deleted At') if 'Deleted At' in b_headers else 1
+            user_idx = b_headers.index('Deleted By Email') if 'Deleted By Email' in b_headers else 3
+            year_idx = b_headers.index('Complain Date Year') if 'Complain Date Year' in b_headers else 5
+            reason_idx = b_headers.index('Batch Reason') if 'Batch Reason' in b_headers else 6
+            status_idx = b_headers.index('Restored Status') if 'Restored Status' in b_headers else 7
+
+            backups_dict = {}
+            for r in b_rows[1:]:
+                bid = r[b_id_idx].strip() if len(r) > b_id_idx else ''
+                if not bid:
+                    continue
+                if bid not in backups_dict:
+                    backups_dict[bid] = {
+                        'backup_id': bid,
+                        'deleted_at': r[date_idx].strip() if len(r) > date_idx else '',
+                        'deleted_by': r[user_idx].strip() if len(r) > user_idx else '',
+                        'year': r[year_idx].strip() if len(r) > year_idx else '',
+                        'reason': r[reason_idx].strip() if len(r) > reason_idx else '',
+                        'status': r[status_idx].strip() if len(r) > status_idx else 'ACTIVE_BACKUP',
+                        'count': 0
+                    }
+                backups_dict[bid]['count'] += 1
+
+            return list(reversed(list(backups_dict.values())))
 
     @classmethod
     def update_complaint_status(cls, complaint_id, new_status, changed_by_user, remarks=''):

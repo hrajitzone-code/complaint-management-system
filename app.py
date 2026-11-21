@@ -1732,6 +1732,317 @@ def delete_complaint_endpoint(complaint_id):
         logger.error(f"Error deleting complaint {complaint_id}: {e}")
         return jsonify({'status': 'error', 'message': f"Failed to delete complaint from Google Sheets: {str(e)}"}), 500
 
+# =============================================================================
+# SUPER ADMIN BULK COMPLAINT DELETE & RECOVERY APIS
+# =============================================================================
+
+@app.route('/api/complaints/years', methods=['GET'])
+@login_required
+@permission_required('complaints:view')
+def get_complaint_years():
+    """
+    Returns unique years extracted strictly from 'Complain Date' in descending order.
+    """
+    try:
+        user = get_current_user()
+        db = get_db()
+        complaints = db.get_complaints_for_user(
+            user['email'],
+            user['role'],
+            user_departments=user.get('departments'),
+            user_dict=user
+        )
+        years_set = set()
+        for c in complaints:
+            dt = ReportService.parse_date(c.get('Complain Date'))
+            if dt:
+                years_set.add(str(dt.year))
+
+        current_year = str(datetime.datetime.now(datetime.timezone.utc).year)
+        years_set.add(current_year)
+
+        sorted_years = sorted(list(years_set), reverse=True)
+        return jsonify({
+            'status': 'success',
+            'years': sorted_years
+        })
+    except Exception as e:
+        logger.error(f"Error fetching complaint years: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to fetch years: {str(e)}"}), 500
+
+@app.route('/api/complaints/bulk-delete/preview', methods=['POST'])
+@login_required
+@super_admin_required
+def preview_bulk_delete():
+    """
+    Exclusively for Super Admin.
+    Rechecks records to be deleted matching the year filter and/or selected complaint IDs.
+    Calculates summary metrics, date range, counts by status and department.
+    """
+    try:
+        user = get_current_user()
+        db = get_db()
+        data = request.get_json(silent=True) or {}
+        year = str(data.get('year') or '').strip()
+        selected_ids = data.get('complaint_ids')
+        if isinstance(selected_ids, list):
+            selected_ids = [str(x).strip() for x in selected_ids if str(x).strip()]
+        else:
+            selected_ids = None
+
+        all_complaints = db.get_all_complaints()
+
+        matched_records = []
+        for c in all_complaints:
+            cid = c.get('Complaint ID', '').strip()
+            if selected_ids is not None and cid not in selected_ids:
+                continue
+
+            # Strict Complain Date Year check
+            if year and year.upper() != 'ALL':
+                c_date = c.get('Complain Date', '')
+                dt = ReportService.parse_date(c_date)
+                if not dt or str(dt.year) != year:
+                    continue
+
+            matched_records.append(c)
+
+        if not matched_records:
+            return jsonify({
+                'status': 'success',
+                'matched_count': 0,
+                'year': year,
+                'complaint_ids': [],
+                'earliest_date': None,
+                'latest_date': None,
+                'status_summary': {},
+                'department_summary': {},
+                'message': 'No complaints found matching the specified criteria.'
+            })
+
+        dates = []
+        status_counts = {}
+        dept_counts = {}
+        matched_ids = []
+
+        for c in matched_records:
+            cid = c.get('Complaint ID', '').strip()
+            matched_ids.append(cid)
+            dt = ReportService.parse_date(c.get('Complain Date'))
+            if dt:
+                dates.append(dt)
+            st = c.get('Status') or 'Submitted'
+            status_counts[st] = status_counts.get(st, 0) + 1
+            dept = c.get('Department Name') or 'General'
+            dept_counts[dept] = dept_counts.get(dept, 0) + 1
+
+        earliest_dt = min(dates).strftime('%Y-%m-%d') if dates else None
+        latest_dt = max(dates).strftime('%Y-%m-%d') if dates else None
+
+        return jsonify({
+            'status': 'success',
+            'matched_count': len(matched_records),
+            'year': year,
+            'complaint_ids': matched_ids,
+            'earliest_date': earliest_dt,
+            'latest_date': latest_dt,
+            'status_summary': status_counts,
+            'department_summary': dept_counts,
+            'sample_complaints': matched_records[:10]
+        })
+    except Exception as e:
+        logger.error(f"Error previewing bulk delete: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f"Failed to preview bulk delete: {str(e)}"}), 500
+
+@app.route('/api/complaints/bulk-delete/export-backup', methods=['POST', 'GET'])
+@login_required
+@super_admin_required
+def export_bulk_delete_backup():
+    """
+    Exclusively for Super Admin.
+    Generates a full Excel (.xlsx) backup of the complaints targeted for deletion.
+    """
+    try:
+        user = get_current_user()
+        db = get_db()
+        data = request.get_json(silent=True) or request.args
+        year = str(data.get('year') or '').strip()
+        selected_ids = data.get('complaint_ids')
+        if isinstance(selected_ids, str):
+            selected_ids = [x.strip() for x in selected_ids.split(',') if x.strip()]
+        elif not isinstance(selected_ids, list):
+            selected_ids = None
+
+        all_complaints = db.get_all_complaints()
+        matched = []
+        for c in all_complaints:
+            cid = c.get('Complaint ID', '').strip()
+            if selected_ids is not None and cid not in selected_ids:
+                continue
+            if year and year.upper() != 'ALL':
+                dt = ReportService.parse_date(c.get('Complain Date'))
+                if not dt or str(dt.year) != year:
+                    continue
+            matched.append(c)
+
+        if not matched:
+            return jsonify({'status': 'error', 'message': 'No complaints found to export.'}), 404
+
+        columns = [
+            {'id': 'Complaint ID', 'label': 'Complaint ID'},
+            {'id': 'Complain Date', 'label': 'Complain Date'},
+            {'id': 'Timestamp', 'label': 'Created Timestamp'},
+            {'id': 'Customer Name', 'label': 'Customer Name'},
+            {'id': 'Customer Mobile No.', 'label': 'Customer Mobile'},
+            {'id': 'Invoice No.', 'label': 'Invoice No.'},
+            {'id': 'Complain Types', 'label': 'Type / Issue'},
+            {'id': 'Department Name', 'label': 'Department'},
+            {'id': 'From Department', 'label': 'From Department'},
+            {'id': 'Priority', 'label': 'Priority'},
+            {'id': 'Status', 'label': 'Status'},
+            {'id': 'Vendor Name', 'label': 'Vendor'},
+            {'id': 'Salesperson Name', 'label': 'Salesperson'},
+            {'id': 'Handled By', 'label': 'Handled By'},
+            {'id': 'GR Amount', 'label': 'GR Amount'},
+            {'id': 'Remarks', 'label': 'Remarks'},
+            {'id': 'Complain Details', 'label': 'Details'}
+        ]
+
+        title = f"Complaint Deletion Backup — Year {year or 'All'}"
+        summary = f"Generated by Super Admin ({user.get('email')}) before bulk deletion. Total records: {len(matched)}."
+        excel_bytes = ReportService.generate_excel(
+            records=matched,
+            columns=columns,
+            report_title=title,
+            filter_summary=summary,
+            user_name=user.get('name', 'Super Admin')
+        )
+
+        timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')
+        filename = f"complaints_backup_year_{year or 'all'}_{timestamp_str}.xlsx"
+
+        return send_file(
+            io.BytesIO(excel_bytes),
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        logger.error(f"Error exporting bulk delete backup: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f"Failed to export backup: {str(e)}"}), 500
+
+@app.route('/api/complaints/bulk-delete', methods=['POST'])
+@login_required
+@super_admin_required
+def execute_bulk_delete():
+    """
+    Exclusively for Super Admin.
+    Executes atomic bulk deletion of complaints with:
+    - Confirmation verification ('DELETE')
+    - Revalidation of records and year alignment
+    - Automated recoverable backup saved to Deleted_Complaints_Backup
+    - Comprehensive audit logging
+    """
+    try:
+        user = get_current_user()
+        db = get_db()
+        data = request.get_json(silent=True) or {}
+        year = str(data.get('year') or '').strip()
+        confirmation = str(data.get('confirmation') or '').strip().upper()
+        complaint_ids = data.get('complaint_ids')
+
+        # Double safety check: explicit confirmation required
+        if confirmation != 'DELETE' and confirmation != f"DELETE {year}":
+            return jsonify({
+                'status': 'error',
+                'message': "Action aborted. Explicit confirmation phrase 'DELETE' is required to execute bulk deletion."
+            }), 400
+
+        # If complaint_ids not directly provided, find all complaints matching the year
+        if not complaint_ids:
+            if not year or year.upper() == 'ALL':
+                return jsonify({
+                    'status': 'error',
+                    'message': "Please specify either a specific Year filter or a list of complaint IDs to delete."
+                }), 400
+            all_comp = db.get_all_complaints()
+            complaint_ids = []
+            for c in all_comp:
+                dt = ReportService.parse_date(c.get('Complain Date'))
+                if dt and str(dt.year) == year:
+                    complaint_ids.append(c.get('Complaint ID'))
+
+        if not complaint_ids:
+            return jsonify({
+                'status': 'error',
+                'message': "No complaints found to delete for the specified criteria."
+            }), 400
+
+        result = db.bulk_delete_complaints(
+            complaint_ids=complaint_ids,
+            deleted_by_user=user,
+            reason=f"Super Admin bulk delete (Year: {year or 'All'})",
+            year=year
+        )
+
+        return jsonify({
+            'status': 'success',
+            'message': f"Successfully deleted {result['deleted_count']} complaint(s) for Year {year or 'All'}. Recoverable backup created: {result['backup_id']}.",
+            'data': result
+        })
+    except ValueError as ve:
+        return jsonify({'status': 'error', 'message': str(ve)}), 400
+    except Exception as e:
+        logger.error(f"Error executing bulk delete: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f"Failed to execute bulk deletion: {str(e)}"}), 500
+
+@app.route('/api/complaints/bulk-delete/backups', methods=['GET'])
+@login_required
+@super_admin_required
+def list_bulk_delete_backups():
+    """
+    Exclusively for Super Admin.
+    Lists all bulk deletion backups available in Deleted_Complaints_Backup worksheet.
+    """
+    try:
+        db = get_db()
+        backups = db.get_bulk_delete_backups()
+        return jsonify({
+            'status': 'success',
+            'backups': backups
+        })
+    except Exception as e:
+        logger.error(f"Error fetching bulk delete backups: {e}")
+        return jsonify({'status': 'error', 'message': f"Failed to fetch backups: {str(e)}"}), 500
+
+@app.route('/api/complaints/bulk-delete/restore', methods=['POST'])
+@login_required
+@super_admin_required
+def restore_bulk_delete():
+    """
+    Exclusively for Super Admin.
+    Restores complaints from a recoverable backup in Deleted_Complaints_Backup.
+    """
+    try:
+        user = get_current_user()
+        db = get_db()
+        data = request.get_json(silent=True) or {}
+        backup_id = str(data.get('backup_id') or '').strip()
+        if not backup_id:
+            return jsonify({'status': 'error', 'message': 'Backup ID is required.'}), 400
+
+        result = db.restore_bulk_deleted_complaints(backup_id=backup_id, restored_by_user=user)
+        return jsonify({
+            'status': 'success',
+            'message': f"Successfully restored {result['restored_count']} complaint(s) from backup {backup_id}.",
+            'data': result
+        })
+    except ValueError as ve:
+        return jsonify({'status': 'error', 'message': str(ve)}), 400
+    except Exception as e:
+        logger.error(f"Error restoring bulk delete: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f"Failed to restore complaints: {str(e)}"}), 500
+
 @app.route('/api/complaints', methods=['GET'])
 @app.route('/api/complaints/my', methods=['GET'])
 @login_required
@@ -1764,6 +2075,7 @@ def list_complaints():
         from_date_arg = (request.args.get('from_date') or request.args.get('start_date') or '').strip()
         to_date_arg = (request.args.get('to_date') or request.args.get('end_date') or '').strip()
         month_year_arg = (request.args.get('month_year') or '').strip()
+        year_arg = (request.args.get('year') or '').strip()
         vendor_arg = (request.args.get('vendor') or request.args.get('vendor_name') or '').strip().lower()
         salesperson_arg = (request.args.get('salesperson') or request.args.get('salesperson_name') or '').strip().lower()
         type_arg = (request.args.get('complaint_type') or request.args.get('type') or '').strip().lower()
@@ -1800,6 +2112,9 @@ def list_complaints():
                     continue
             if month_year_arg and month_year_arg.upper() != 'ALL':
                 if not c_date_dt or c_date_dt.strftime('%Y-%m') != month_year_arg:
+                    continue
+            if year_arg and year_arg.upper() != 'ALL':
+                if not c_date_dt or str(c_date_dt.year) != year_arg:
                     continue
 
             # 3. Department filter
@@ -3105,7 +3420,7 @@ def _extract_report_filters(req_source):
     filters = {}
     # Direct scalar fields
     for k in [
-        'date_preset', 'start_date', 'end_date', 'month_year', 'employee_name', 'handled_by',
+        'date_preset', 'start_date', 'end_date', 'month_year', 'year', 'employee_name', 'handled_by',
         'salesperson_name', 'complain_types', 'category', 'customer_name',
         'customer_mobile_no', 'invoice_no', 'closing_start_date', 'closing_end_date',
         'gr_expected_start_date', 'gr_expected_end_date', 'gr_amount_min', 'gr_amount_max',

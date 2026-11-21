@@ -250,6 +250,7 @@ class ReportService:
 
         # Month-Year Filter (strictly uses Complain Date)
         month_year_filter = (filters.get('month_year') or '').strip()
+        year_filter = (filters.get('year') or '').strip()
 
         # From Department Filter
         from_dept_filter = filters.get('from_department') or filters.get('from_dept')
@@ -327,6 +328,12 @@ class ReportService:
             if month_year_filter and month_year_filter.upper() != 'ALL':
                 comp_dt = cls.parse_date(c.get('Complain Date'))
                 if not comp_dt or comp_dt.strftime('%Y-%m') != month_year_filter:
+                    continue
+
+            # Year filter (strictly uses Complain Date)
+            if year_filter and year_filter.upper() != 'ALL':
+                comp_dt = cls.parse_date(c.get('Complain Date'))
+                if not comp_dt or str(comp_dt.year) != year_filter:
                     continue
 
             # From Department filter

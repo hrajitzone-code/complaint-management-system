@@ -22,6 +22,8 @@ let manageComplaintsState = {
     pageSize: 25,
     totalPages: 1,
     filteredRecords: [],
+    selectedIds: new Set(),
+    bulkDeleteTarget: null,
     sortBy: 'date',
     sortDir: 'desc'
 };
@@ -1822,6 +1824,30 @@ function populateGlobalFilterOptions(records) {
     updateMonthSelect('my-month-year-filter');
     updateMonthSelect('manage-month-year-filter');
 
+    // Populate Year filter strictly from Complain Date
+    const yearsSet = new Set();
+    const currYear = new Date().getFullYear();
+    yearsSet.add(currYear);
+    records.forEach(c => {
+        const parsed = parseComplaintDate(c['Complain Date'] || c.complain_date);
+        if (parsed && parsed.year) {
+            yearsSet.add(parsed.year);
+        }
+    });
+    const sortedYears = Array.from(yearsSet).sort((a, b) => b - a);
+    const yearSelect = document.getElementById('manage-year-filter');
+    if (yearSelect) {
+        const currentYearVal = yearSelect.value || 'ALL';
+        let yHtml = '<option value="ALL">Year: All</option>';
+        sortedYears.forEach(y => {
+            yHtml += `<option value="${y}">Year: ${y}</option>`;
+        });
+        yearSelect.innerHTML = yHtml;
+        if (currentYearVal && Array.from(yearSelect.options).some(o => o.value === currentYearVal)) {
+            yearSelect.value = currentYearVal;
+        }
+    }
+
     // Populate datalists
     const fillDatalist = (id, setObj) => {
         const el = document.getElementById(id);
@@ -2119,6 +2145,7 @@ function resetManageFilters() {
         { id: 'manage-from-dept-filter', val: 'ALL' },
         { id: 'manage-priority-filter', val: 'ALL' },
         { id: 'manage-status-filter', val: 'ALL' },
+        { id: 'manage-year-filter', val: 'ALL' },
         { id: 'manage-month-year-filter', val: 'ALL' },
         { id: 'manage-sort-by', val: 'date-desc' }
     ];
@@ -2127,10 +2154,15 @@ function resetManageFilters() {
         if (el) el.value = val;
     });
 
+    if (manageComplaintsState.selectedIds) {
+        manageComplaintsState.selectedIds.clear();
+    }
+
     manageComplaintsState.sortBy = 'date';
     manageComplaintsState.sortDir = 'desc';
 
     filterManageComplaints(1);
+    updateManageBulkBar();
 }
 
 async function loadMyComplaints(forceRefresh = false) {
@@ -2531,6 +2563,7 @@ function filterManageComplaints(page = 1) {
     const fromDept = (document.getElementById('manage-from-dept-filter')?.value || 'ALL').toLowerCase().trim();
     const status = (document.getElementById('manage-status-filter')?.value || 'ALL').toLowerCase().trim();
     const priority = (document.getElementById('manage-priority-filter')?.value || 'ALL').toLowerCase().trim();
+    const yearFilter = (document.getElementById('manage-year-filter')?.value || 'ALL').trim();
     const monthYear = (document.getElementById('manage-month-year-filter')?.value || 'ALL').trim();
     const fromDate = (document.getElementById('manage-from-date')?.value || '').trim();
     const toDate = (document.getElementById('manage-to-date')?.value || '').trim();
@@ -2558,6 +2591,12 @@ function filterManageComplaints(page = 1) {
         }
         if (toDate) {
             if (!cIsoDate || cIsoDate > toDate) return false;
+        }
+
+        // Year Filter (Strictly uses Complain Date)
+        if (yearFilter !== 'ALL') {
+            const cYear = parsedDate ? String(parsedDate.year) : '';
+            if (!cYear || cYear !== yearFilter) return false;
         }
 
         // Quick Month-Year Filter
@@ -2671,6 +2710,8 @@ function filterManageComplaints(page = 1) {
         return true;
     });
 
+    manageComplaintsState.filteredRecords = filtered;
+
     // Apply Active Sorting
     const sorted = sortComplaintRecords(filtered, manageComplaintsState.sortBy, manageComplaintsState.sortDir);
 
@@ -2780,16 +2821,26 @@ function renderManagePagination(p) {
 
 function renderManageTable(complaints) {
     const tbody = document.getElementById('manage-complaints-table');
+    const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
+    const colSpan = isSuperAdmin ? 11 : 10;
     if (!complaints.length) {
-        tbody.innerHTML = '<tr><td colspan="10" class="text-center py-4 text-muted">No complaints found.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${colSpan}" class="text-center py-4 text-muted">No complaints found.</td></tr>`;
+        updateManageBulkBar();
         return;
     }
 
     const canDelete = hasPermission('complaints:delete');
     const canEdit = hasPermission('complaints:edit');
 
-    tbody.innerHTML = complaints.map(c => `
+    tbody.innerHTML = complaints.map(c => {
+        const isSelected = manageComplaintsState.selectedIds && manageComplaintsState.selectedIds.has(c['Complaint ID']);
+        return `
         <tr>
+            ${isSuperAdmin ? `
+                <td class="super-admin-only manage-checkbox-col" style="text-align: center;">
+                    <input type="checkbox" class="manage-row-checkbox" value="${c['Complaint ID']}" ${isSelected ? 'checked' : ''} onchange="handleManageRowCheckboxChange(event)">
+                </td>
+            ` : ''}
             <td><strong><code>${c['Complaint ID']}</code></strong></td>
             <td><strong>${escapeHtml(c['Customer Name'] || c['Complainant Name'] || '-')}</strong>${c['Customer Mobile No.'] ? `<br><small class="text-muted">${escapeHtml(c['Customer Mobile No.'])}</small>` : ''}</td>
             <td>${escapeHtml(c['Invoice No.'] || '-')}</td>
@@ -2807,7 +2858,408 @@ function renderManageTable(complaints) {
                 </div>
             </td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
+
+    updateManageBulkBar();
+}
+
+// =============================================================================
+// SUPER ADMIN BULK COMPLAINT DELETE & RECOVERY HANDLERS
+// =============================================================================
+
+function handleManageYearChange(event) {
+    if (manageComplaintsState.selectedIds) {
+        manageComplaintsState.selectedIds.clear();
+    }
+    filterManageComplaints(1);
+    updateManageBulkBar();
+}
+
+function handleManageRowCheckboxChange(event) {
+    const cid = event.target.value;
+    if (!manageComplaintsState.selectedIds) {
+        manageComplaintsState.selectedIds = new Set();
+    }
+    if (event.target.checked) {
+        manageComplaintsState.selectedIds.add(cid);
+    } else {
+        manageComplaintsState.selectedIds.delete(cid);
+    }
+    updateManageBulkBar();
+}
+
+function toggleSelectAllManageComplaints(event) {
+    const checked = event.target.checked;
+    if (!manageComplaintsState.selectedIds) {
+        manageComplaintsState.selectedIds = new Set();
+    }
+    const checkboxes = document.querySelectorAll('.manage-row-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = checked;
+        if (checked) {
+            manageComplaintsState.selectedIds.add(cb.value);
+        } else {
+            manageComplaintsState.selectedIds.delete(cb.value);
+        }
+    });
+    updateManageBulkBar();
+}
+
+function selectAllFilteredManageComplaints() {
+    if (!manageComplaintsState.selectedIds) {
+        manageComplaintsState.selectedIds = new Set();
+    }
+    const filtered = manageComplaintsState.filteredRecords || [];
+    filtered.forEach(c => {
+        const cid = c['Complaint ID'];
+        if (cid) manageComplaintsState.selectedIds.add(cid);
+    });
+    document.querySelectorAll('.manage-row-checkbox').forEach(cb => {
+        cb.checked = true;
+    });
+    updateManageBulkBar();
+    showToast(`Selected all ${manageComplaintsState.selectedIds.size} filtered complaints.`, 'info');
+}
+
+function clearManageSelection() {
+    if (manageComplaintsState.selectedIds) {
+        manageComplaintsState.selectedIds.clear();
+    }
+    document.querySelectorAll('.manage-row-checkbox').forEach(cb => {
+        cb.checked = false;
+    });
+    const headerChk = document.getElementById('manage-select-all-checkbox');
+    if (headerChk) {
+        headerChk.checked = false;
+        headerChk.indeterminate = false;
+    }
+    updateManageBulkBar();
+}
+
+function updateManageBulkBar() {
+    const isSuperAdmin = currentUser && currentUser.role === 'Super Admin';
+    const bulkActionsEl = document.getElementById('manage-superadmin-bulk-actions');
+    const bulkBarEl = document.getElementById('manage-bulk-selection-bar');
+    const chkCols = document.querySelectorAll('.manage-checkbox-col');
+
+    if (!isSuperAdmin) {
+        if (bulkActionsEl) bulkActionsEl.style.display = 'none';
+        if (bulkBarEl) bulkBarEl.style.display = 'none';
+        chkCols.forEach(el => el.style.display = 'none');
+        return;
+    }
+
+    if (bulkActionsEl) bulkActionsEl.style.display = 'inline-flex';
+    chkCols.forEach(el => el.style.display = '');
+
+    const selectedCount = manageComplaintsState.selectedIds ? manageComplaintsState.selectedIds.size : 0;
+    const yearVal = (document.getElementById('manage-year-filter')?.value || 'ALL').trim();
+    const filteredCount = manageComplaintsState.filteredRecords ? manageComplaintsState.filteredRecords.length : 0;
+
+    const countEl = document.getElementById('manage-selected-count');
+    if (countEl) countEl.textContent = selectedCount.toLocaleString();
+
+    const filteredCountEl = document.getElementById('manage-bulk-filtered-count');
+    if (filteredCountEl) filteredCountEl.textContent = filteredCount.toLocaleString();
+
+    const yearBadge = document.getElementById('manage-selected-year-badge');
+    if (yearBadge) {
+        if (yearVal && yearVal.toUpperCase() !== 'ALL') {
+            yearBadge.style.display = 'inline-block';
+            yearBadge.textContent = `Year: ${yearVal}`;
+        } else {
+            yearBadge.style.display = 'none';
+        }
+    }
+
+    if (bulkBarEl) {
+        if (selectedCount > 0 || (yearVal && yearVal.toUpperCase() !== 'ALL')) {
+            bulkBarEl.style.display = 'flex';
+        } else {
+            bulkBarEl.style.display = 'none';
+        }
+    }
+
+    // Sync header checkbox
+    const headerChk = document.getElementById('manage-select-all-checkbox');
+    if (headerChk) {
+        const rowCheckboxes = Array.from(document.querySelectorAll('.manage-row-checkbox'));
+        if (rowCheckboxes.length > 0 && rowCheckboxes.every(cb => cb.checked)) {
+            headerChk.checked = true;
+            headerChk.indeterminate = false;
+        } else if (rowCheckboxes.some(cb => cb.checked)) {
+            headerChk.checked = false;
+            headerChk.indeterminate = true;
+        } else {
+            headerChk.checked = false;
+            headerChk.indeterminate = false;
+        }
+    }
+}
+
+async function openBulkDeleteModal() {
+    if (!currentUser || currentUser.role !== 'Super Admin') {
+        showToast('Super Administrator authorization required.', 'error');
+        return;
+    }
+
+    const selectedIds = manageComplaintsState.selectedIds ? Array.from(manageComplaintsState.selectedIds) : [];
+    const yearVal = (document.getElementById('manage-year-filter')?.value || 'ALL').trim();
+
+    if (selectedIds.length === 0 && (yearVal === 'ALL' || !yearVal)) {
+        showToast('Please select a Complaint Year or check specific complaints to delete.', 'warning');
+        return;
+    }
+
+    const modal = document.getElementById('modal-bulk-delete-confirm');
+    if (!modal) return;
+
+    // Reset inputs
+    const confirmInput = document.getElementById('bulk-delete-confirm-input');
+    if (confirmInput) confirmInput.value = '';
+    const execBtn = document.getElementById('btn-execute-bulk-delete');
+    if (execBtn) execBtn.disabled = true;
+
+    document.getElementById('bulk-modal-year').textContent = (yearVal && yearVal.toUpperCase() !== 'ALL') ? yearVal : 'Multiple / Selected';
+    document.getElementById('bulk-modal-count').textContent = 'Calculating...';
+    document.getElementById('bulk-modal-daterange').textContent = 'Fetching preview...';
+    document.getElementById('bulk-modal-btn-count').textContent = '...';
+
+    modal.style.display = 'flex';
+
+    try {
+        const res = await fetch('/api/complaints/bulk-delete/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                year: (yearVal && yearVal.toUpperCase() !== 'ALL') ? yearVal : '',
+                complaint_ids: selectedIds.length > 0 ? selectedIds : null
+            })
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+            document.getElementById('bulk-modal-year').textContent = data.year || (yearVal && yearVal.toUpperCase() !== 'ALL' ? yearVal : 'Multiple / Selected');
+            document.getElementById('bulk-modal-count').textContent = `${data.matched_count} complaint(s)`;
+            document.getElementById('bulk-modal-btn-count').textContent = data.matched_count;
+            document.getElementById('bulk-modal-daterange').textContent = (data.earliest_date && data.latest_date) ? `${data.earliest_date} to ${data.latest_date}` : 'N/A';
+
+            manageComplaintsState.bulkDeleteTarget = {
+                year: data.year,
+                count: data.matched_count,
+                ids: data.complaint_ids
+            };
+        } else {
+            showToast(data.message || 'Error previewing records.', 'error');
+            closeBulkDeleteModal();
+        }
+    } catch (e) {
+        showToast('Network error previewing bulk delete.', 'error');
+        closeBulkDeleteModal();
+    }
+}
+
+function closeBulkDeleteModal() {
+    const modal = document.getElementById('modal-bulk-delete-confirm');
+    if (modal) modal.style.display = 'none';
+}
+
+function handleBulkDeleteConfirmInput(event) {
+    const val = (event.target.value || '').trim().toUpperCase();
+    const btn = document.getElementById('btn-execute-bulk-delete');
+    if (btn) {
+        btn.disabled = (val !== 'DELETE');
+    }
+}
+
+async function executeBulkDeleteAction() {
+    if (!currentUser || currentUser.role !== 'Super Admin') {
+        showToast('Super Administrator authorization required.', 'error');
+        return;
+    }
+
+    const target = manageComplaintsState.bulkDeleteTarget;
+    if (!target || !target.ids || target.ids.length === 0) {
+        showToast('No complaints targeted for deletion.', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('btn-execute-bulk-delete');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>Deleting & Archiving...</span>';
+    }
+
+    try {
+        const res = await fetch('/api/complaints/bulk-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                year: target.year || '',
+                complaint_ids: target.ids,
+                confirmation: 'DELETE'
+            })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+            closeBulkDeleteModal();
+            showToast(data.message || 'Bulk deletion completed successfully.', 'success');
+            clearManageSelection();
+            await loadManageComplaints(true);
+        } else {
+            showToast(data.message || 'Failed to delete complaints.', 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = `🗑️ Permanently Delete (${target.count})`;
+            }
+        }
+    } catch (e) {
+        showToast('Network error during bulk deletion.', 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `🗑️ Permanently Delete (${target?.count || 0})`;
+        }
+    }
+}
+
+async function exportSelectedBackupExcel() {
+    const selectedIds = manageComplaintsState.selectedIds ? Array.from(manageComplaintsState.selectedIds) : [];
+    const yearVal = (document.getElementById('manage-year-filter')?.value || 'ALL').trim();
+
+    if (selectedIds.length === 0 && (yearVal === 'ALL' || !yearVal)) {
+        showToast('Please select a Year or check complaints to export backup.', 'warning');
+        return;
+    }
+
+    try {
+        showToast('Generating Excel backup...', 'info');
+        const res = await fetch('/api/complaints/bulk-delete/export-backup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                year: (yearVal && yearVal.toUpperCase() !== 'ALL') ? yearVal : '',
+                complaint_ids: selectedIds.length > 0 ? selectedIds : null
+            })
+        });
+
+        if (!res.ok) {
+            const errData = await res.json();
+            showToast(errData.message || 'Failed to export backup.', 'error');
+            return;
+        }
+
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        a.download = `complaints_backup_${yearVal !== 'ALL' ? yearVal : 'selected'}_${ts}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+        showToast('Backup Excel file downloaded successfully.', 'success');
+    } catch (e) {
+        showToast('Network error downloading backup.', 'error');
+    }
+}
+
+async function openBulkRestoreModal() {
+    if (!currentUser || currentUser.role !== 'Super Admin') {
+        showToast('Super Administrator authorization required.', 'error');
+        return;
+    }
+
+    const modal = document.getElementById('modal-bulk-restore');
+    if (!modal) return;
+
+    const tbody = document.getElementById('bulk-backups-table-body');
+    if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">Loading backups...</td></tr>';
+    }
+
+    modal.style.display = 'flex';
+
+    try {
+        const res = await fetch('/api/complaints/bulk-delete/backups');
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+            renderBulkBackupsTable(data.backups || []);
+        } else {
+            if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-danger">${escapeHtml(data.message || 'Error loading backups.')}</td></tr>`;
+        }
+    } catch (e) {
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-danger">Network error loading backups.</td></tr>';
+    }
+}
+
+function renderBulkBackupsTable(backups) {
+    const tbody = document.getElementById('bulk-backups-table-body');
+    if (!tbody) return;
+
+    if (!backups.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">No deletion backups found in Google Sheets storage.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = backups.map(b => {
+        const isRestored = (b.status === 'RESTORED');
+        return `
+            <tr>
+                <td><strong><code>${escapeHtml(b.backup_id)}</code></strong></td>
+                <td>${escapeHtml(b.deleted_at || '-')}</td>
+                <td><small class="text-muted">${escapeHtml(b.deleted_by || '-')}</small></td>
+                <td><span class="badge" style="background: #e2e8f0; color: #334155;">${escapeHtml(b.year || 'All')}</span></td>
+                <td><strong>${b.count}</strong> records</td>
+                <td>
+                    ${isRestored 
+                        ? '<span class="badge badge-status-resolved">✓ Restored</span>' 
+                        : '<span class="badge" style="background: #fee2e2; color: #991b1b;">Active Backup</span>'}
+                </td>
+                <td style="text-align: right;">
+                    ${isRestored 
+                        ? '<button class="btn btn-secondary btn-sm" disabled>Restored</button>' 
+                        : `<button class="btn btn-outline-success btn-sm" onclick="restoreBackupAction('${escapeHtml(b.backup_id)}')">🔄 Restore</button>`}
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function closeBulkRestoreModal() {
+    const modal = document.getElementById('modal-bulk-restore');
+    if (modal) modal.style.display = 'none';
+}
+
+async function restoreBackupAction(backupId) {
+    if (!confirm(`Are you sure you want to restore all complaints from backup '${backupId}' back into active records in Google Sheets?`)) {
+        return;
+    }
+
+    try {
+        showToast('Restoring complaints from backup...', 'info');
+        const res = await fetch('/api/complaints/bulk-delete/restore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ backup_id: backupId })
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+            showToast(data.message || 'Complaints restored successfully.', 'success');
+            const refreshRes = await fetch('/api/complaints/bulk-delete/backups');
+            const refreshData = await refreshRes.json();
+            if (refreshData.backups) {
+                renderBulkBackupsTable(refreshData.backups);
+            }
+            await loadManageComplaints(true);
+        } else {
+            showToast(data.message || 'Failed to restore complaints.', 'error');
+        }
+    } catch (e) {
+        showToast('Network error restoring complaints.', 'error');
+    }
 }
 
 // =============================================================================

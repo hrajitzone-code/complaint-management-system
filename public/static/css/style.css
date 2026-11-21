@@ -1944,3 +1944,26 @@ th.th-sorted-desc .sort-icon {
     color: #1d4ed8 !important;
     font-weight: 600 !important;
 }
+
+/* Super Admin Bulk Complaint Management */
+.manage-checkbox-col {
+    width: 40px !important;
+    text-align: center !important;
+    vertical-align: middle !important;
+}
+
+.manage-checkbox-col input[type="checkbox"] {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+    accent-color: #be123c;
+}
+
+#manage-bulk-selection-bar {
+    animation: fadeInSlide 0.2s ease-out;
+}
+
+@keyframes fadeInSlide {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+}

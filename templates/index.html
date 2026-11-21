@@ -810,6 +810,9 @@
                                     <option value="amount-desc">Sort: Amount (High to Low)</option>
                                     <option value="amount-asc">Sort: Amount (Low to High)</option>
                                 </select>
+                                <select id="manage-year-filter" class="filter-select" title="Filter by Complaint Year (Complain Date)" onchange="handleManageYearChange(event)">
+                                    <option value="ALL" selected>Year: All</option>
+                                </select>
                                 <select id="manage-month-year-filter" class="filter-select" title="Filter by Month-Year (Complain Date)" onchange="filterManageComplaints(1)">
                                     <option value="ALL" selected>Month-Year: All</option>
                                 </select>
@@ -844,6 +847,14 @@
                                 <button type="button" class="btn btn-secondary btn-sm" onclick="resetManageFilters()" title="Clear all filters and restore full view">
                                     Clear All Filters
                                 </button>
+                                <div id="manage-superadmin-bulk-actions" class="super-admin-only" style="display: none; align-items: center; gap: 6px;">
+                                    <button type="button" class="btn btn-danger btn-sm" onclick="openBulkDeleteModal()" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 600;" title="Bulk Delete Complaints for Selected Year (Super Admin only)">
+                                        🗑️ Bulk Delete
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="openBulkRestoreModal()" style="display: inline-flex; align-items: center; gap: 5px;" title="View backups & restore deleted complaints">
+                                        🔄 Backups & Restore
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -906,6 +917,29 @@
                             </div>
                         </div>
 
+                        <!-- Super Admin Bulk Selection Bar -->
+                        <div id="manage-bulk-selection-bar" class="super-admin-only" style="display: none; margin: 0 0 14px 0; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 6px; padding: 10px 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                            <div style="display: flex; align-items: center; gap: 12px; font-size: 0.9rem; color: #9f1239; font-weight: 500;">
+                                <span>🛡️ <strong>Super Admin Bulk Control:</strong></span>
+                                <span>Selected: <strong id="manage-selected-count" style="font-weight: 700; color: #be123c;">0</strong> complaints</span>
+                                <span id="manage-selected-year-badge" class="badge" style="background: #ffe4e6; color: #9f1239; font-size: 0.8rem; display: none;">Year: 2026</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="selectAllFilteredManageComplaints()" style="font-size: 0.8rem;">
+                                    Select All Filtered (<span id="manage-bulk-filtered-count">0</span>)
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="clearManageSelection()" style="font-size: 0.8rem;">
+                                    Clear Selection
+                                </button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="exportSelectedBackupExcel()" style="font-size: 0.8rem;">
+                                    📥 Export Backup (Excel)
+                                </button>
+                                <button type="button" class="btn btn-danger btn-sm" onclick="openBulkDeleteModal()" style="font-size: 0.8rem; font-weight: 600;">
+                                    🗑️ Delete Selected
+                                </button>
+                            </div>
+                        </div>
+
                         <!-- Live Record Counts Bar for Manage Complaints -->
                         <div class="live-counts-bar-wrapper" style="margin: 0 0 14px 0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 16px;">
                             <div class="live-record-counts-text" id="manage-live-counts-display" style="font-size: 0.9rem; color: #334155; font-weight: 500;">
@@ -931,6 +965,9 @@
                             <table class="data-table">
                                 <thead>
                                     <tr>
+                                        <th class="super-admin-only manage-checkbox-col" style="width: 36px; text-align: center; display: none;">
+                                            <input type="checkbox" id="manage-select-all-checkbox" onchange="toggleSelectAllManageComplaints(event)" title="Select all complaints on current page">
+                                        </th>
                                         <th class="sortable-th" onclick="handleManageColumnSort('id')" title="Click to sort by Complaint ID">
                                             Complaint ID <span class="sort-icon" id="manage-sort-icon-id">⇅</span>
                                         </th>
@@ -3218,6 +3255,100 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Super Admin Bulk Complaint Delete Confirmation Modal -->
+    <div id="modal-bulk-delete-confirm" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true">
+        <div class="modal-dialog" style="max-width: 580px;">
+            <div class="modal-header" style="background: #fff1f2; border-bottom: 1px solid #fecdd3;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.5rem;">⚠️</span>
+                    <div>
+                        <h3 style="color: #9f1239; margin: 0; font-size: 1.2rem;">Super Admin — Bulk Complaint Deletion</h3>
+                        <p class="text-muted" style="margin: 2px 0 0 0; font-size: 0.82rem;">Permanent deletion from active records with automated recoverable backup</p>
+                    </div>
+                </div>
+                <button type="button" class="btn-close" onclick="closeBulkDeleteModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 20px 24px;">
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 18px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 0.9rem;">
+                        <div>
+                            <span class="text-muted" style="font-size: 0.8rem; display: block;">Selected Year:</span>
+                            <strong id="bulk-modal-year" style="color: #0f172a; font-size: 1.1rem;">2026</strong>
+                        </div>
+                        <div>
+                            <span class="text-muted" style="font-size: 0.8rem; display: block;">Total Records to Delete:</span>
+                            <strong id="bulk-modal-count" style="color: #dc2626; font-size: 1.1rem;">0 complaints</strong>
+                        </div>
+                        <div style="grid-column: 1 / -1;">
+                            <span class="text-muted" style="font-size: 0.8rem; display: block;">Complain Date Range:</span>
+                            <span id="bulk-modal-daterange" style="color: #334155; font-weight: 500;">Calculating...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="alert alert-info" style="font-size: 0.85rem; line-height: 1.45; margin-bottom: 16px;">
+                    🛡️ <strong>Safety Guarantee:</strong> All deleted complaints are automatically archived into the Google Sheets <code>Deleted_Complaints_Backup</code> worksheet before removal and can be restored anytime using the Recovery Center.
+                </div>
+
+                <div style="margin-bottom: 18px;">
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="exportSelectedBackupExcel()" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 500;">
+                        📥 Download Pre-Deletion Excel Backup (.xlsx)
+                    </button>
+                </div>
+
+                <div style="border-top: 1px solid #e2e8f0; padding-top: 16px;">
+                    <label for="bulk-delete-confirm-input" style="font-size: 0.88rem; color: #334155; font-weight: 600; display: block; margin-bottom: 6px;">
+                        To confirm deletion, type <strong style="color: #dc2626;">DELETE</strong> in the box below:
+                    </label>
+                    <input type="text" id="bulk-delete-confirm-input" class="form-control" placeholder="Type DELETE to enable button" oninput="handleBulkDeleteConfirmInput(event)" autocomplete="off" style="font-weight: 600; letter-spacing: 0.5px;">
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 14px 24px; display: flex; justify-content: flex-end; gap: 10px; background: #f8fafc; border-top: 1px solid #e2e8f0;">
+                <button type="button" class="btn btn-secondary" onclick="closeBulkDeleteModal()">Cancel</button>
+                <button type="button" class="btn btn-danger" id="btn-execute-bulk-delete" disabled onclick="executeBulkDeleteAction()" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600;">
+                    🗑️ Permanently Delete (<span id="bulk-modal-btn-count">0</span>)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Super Admin Bulk Backups & Recovery Modal -->
+    <div id="modal-bulk-restore" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true">
+        <div class="modal-dialog modal-lg" style="max-width: 850px;">
+            <div class="modal-header">
+                <div>
+                    <h3 style="margin: 0;">🔄 Super Admin — Complaint Backups & Recovery Center</h3>
+                    <p class="text-muted" style="margin: 2px 0 0 0; font-size: 0.84rem;">View historical deletion archives and restore complaints to active records in Google Sheets</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeBulkRestoreModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 16px 20px;">
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Backup ID</th>
+                                <th>Deleted Date & Time</th>
+                                <th>Deleted By</th>
+                                <th>Year</th>
+                                <th>Records</th>
+                                <th>Status</th>
+                                <th style="text-align: right;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bulk-backups-table-body">
+                            <tr><td colspan="7" class="text-center py-4 text-muted">Loading backups...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 12px 20px; display: flex; justify-content: space-between; align-items: center;">
+                <span class="text-muted" style="font-size: 0.82rem;">Source: Google Sheets <code>Deleted_Complaints_Backup</code></span>
+                <button type="button" class="btn btn-secondary" onclick="closeBulkRestoreModal()">Close</button>
             </div>
         </div>
     </div>

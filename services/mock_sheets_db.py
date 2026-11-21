@@ -67,7 +67,8 @@ class MockSheetsDB:
         'Assignments and Comments': [],
         'System_Config': [],
         'Roles': [],
-        'Audit_Logs': []
+        'Audit_Logs': [],
+        'Deleted_Complaints_Backup': []
     }
 
     @classmethod
@@ -83,7 +84,8 @@ class MockSheetsDB:
             'Assignments and Comments': [],
             'System_Config': [],
             'Roles': [],
-            'Audit_Logs': []
+            'Audit_Logs': [],
+            'Deleted_Complaints_Backup': []
         }
         now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         # Bootstrap system default roles
@@ -1263,6 +1265,146 @@ class MockSheetsDB:
         )
         cls._store['Complaints'].pop(found_idx)
         return True
+
+    @classmethod
+    def bulk_delete_complaints(cls, complaint_ids, deleted_by_user, reason='Super Admin Bulk Delete', year=None):
+        from services.report_service import ReportService
+        target_ids = {str(cid).strip() for cid in complaint_ids if str(cid).strip()}
+        if not target_ids:
+            return {'status': 'success', 'deleted_count': 0, 'backup_id': None, 'deleted_ids': []}
+
+        if 'Deleted_Complaints_Backup' not in cls._store:
+            cls._store['Deleted_Complaints_Backup'] = []
+
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        backup_id = f"BAK-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
+        user_name = deleted_by_user.get('name') or deleted_by_user.get('Full Name') or 'Super Admin'
+        user_email = deleted_by_user.get('email') or deleted_by_user.get('Email') or ''
+        user_role = deleted_by_user.get('role') or deleted_by_user.get('Role') or 'Super Admin'
+
+        keep = []
+        deleted_records = []
+        deleted_ids = []
+
+        for c in cls._store.get('Complaints', []):
+            cid = str(c.get('Complaint ID', '')).strip()
+            if cid in target_ids:
+                if year and str(year).strip().upper() != 'ALL':
+                    c_date = c.get('Complain Date', '')
+                    dt = ReportService.parse_date(c_date)
+                    if dt and str(dt.year) != str(year).strip():
+                        keep.append(c)
+                        continue
+                deleted_records.append(c)
+                deleted_ids.append(cid)
+            else:
+                keep.append(c)
+
+        if not deleted_records:
+            raise ValueError("No matching complaints found for the specified criteria.")
+
+        for c in deleted_records:
+            backup_entry = dict(c)
+            backup_entry['_backup_id'] = backup_id
+            backup_entry['_deleted_at'] = now_str
+            backup_entry['_deleted_by'] = user_email
+            backup_entry['_year'] = str(year or '')
+            backup_entry['_reason'] = reason
+            backup_entry['_status'] = 'ACTIVE_BACKUP'
+            cls._store['Deleted_Complaints_Backup'].append(backup_entry)
+
+        cls._store['Complaints'] = keep
+
+        # Status History
+        for cid in deleted_ids:
+            cls.add_status_history(
+                complaint_id=cid,
+                old_status='ACTIVE',
+                new_status='DELETED',
+                changed_by_name=user_name,
+                changed_by_email=user_email,
+                remarks=f"Bulk deleted by Super Admin (Backup: {backup_id}, Year: {year or 'All'})"
+            )
+
+        # Audit Log
+        cls.log_audit_event(
+            user_id=deleted_by_user.get('user_id'),
+            user_email=user_email,
+            user_role=user_role,
+            action='BULK_COMPLAINT_DELETE',
+            module='COMPLAINTS',
+            record_id=backup_id,
+            details=f"Super Admin bulk deleted {len(deleted_ids)} complaints (Year: {year or 'All'}). Backup ID: {backup_id}.",
+            result='SUCCESS'
+        )
+
+        return {
+            'status': 'success',
+            'backup_id': backup_id,
+            'deleted_count': len(deleted_ids),
+            'deleted_ids': deleted_ids,
+            'year': year,
+            'timestamp': now_str
+        }
+
+    @classmethod
+    def restore_bulk_deleted_complaints(cls, backup_id, restored_by_user):
+        clean_backup_id = str(backup_id).strip()
+        backups = cls._store.get('Deleted_Complaints_Backup', [])
+        matched = [b for b in backups if b.get('_backup_id') == clean_backup_id and b.get('_status') != 'RESTORED']
+        if not matched:
+            raise ValueError(f"Backup '{clean_backup_id}' not found or already restored.")
+
+        existing_ids = {str(c.get('Complaint ID', '')).strip() for c in cls._store.get('Complaints', [])}
+        restored_ids = []
+        for b in matched:
+            c_copy = {k: v for k, v in b.items() if not k.startswith('_')}
+            cid = str(c_copy.get('Complaint ID', '')).strip()
+            if cid not in existing_ids:
+                cls._store['Complaints'].append(c_copy)
+                existing_ids.add(cid)
+                restored_ids.append(cid)
+            b['_status'] = 'RESTORED'
+
+        user_email = restored_by_user.get('email') or restored_by_user.get('Email') or ''
+        cls.log_audit_event(
+            user_id=restored_by_user.get('user_id'),
+            user_email=user_email,
+            user_role=restored_by_user.get('role') or 'Super Admin',
+            action='BULK_COMPLAINT_RESTORE',
+            module='COMPLAINTS',
+            record_id=clean_backup_id,
+            details=f"Super Admin restored {len(restored_ids)} complaints from backup {clean_backup_id}.",
+            result='SUCCESS'
+        )
+
+        return {
+            'status': 'success',
+            'backup_id': clean_backup_id,
+            'restored_count': len(restored_ids),
+            'restored_ids': restored_ids
+        }
+
+    @classmethod
+    def get_bulk_delete_backups(cls):
+        backups = cls._store.get('Deleted_Complaints_Backup', [])
+        grouped = {}
+        for b in backups:
+            bid = b.get('_backup_id')
+            if not bid:
+                continue
+            if bid not in grouped:
+                grouped[bid] = {
+                    'backup_id': bid,
+                    'deleted_at': b.get('_deleted_at', ''),
+                    'deleted_by': b.get('_deleted_by', ''),
+                    'year': b.get('_year', ''),
+                    'reason': b.get('_reason', ''),
+                    'status': b.get('_status', 'ACTIVE_BACKUP'),
+                    'count': 0
+                }
+            grouped[bid]['count'] += 1
+        return list(reversed(list(grouped.values())))
 
     @classmethod
     def update_complaint_status(cls, complaint_id, new_status, changed_by_user, remarks=''):
