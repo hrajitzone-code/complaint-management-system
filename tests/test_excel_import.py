@@ -283,8 +283,8 @@ class TestExcelImportModule(unittest.TestCase):
 
     def test_true_duplicate_protection_exact_reimport_and_record_id(self):
         """
-        Verify rule 5: Prevents accidental re-import of exact identical complaints,
-        while never using customer name or mobile number for duplicate blocking.
+        Verify rule 5: Prevents accidental re-import of exact identical complaints only when
+        EVERY single field is 100% identical, or when explicit Record ID is duplicated.
         """
         # Seed an existing complaint in DB
         MockSheetsDB.create_complaint({
@@ -302,10 +302,10 @@ class TestExcelImportModule(unittest.TestCase):
         }, self.super_admin_user)
 
         rows = [
-            # 1. Exact identical complaint as in database (accidental re-import of exact row)
+            # 1. Exact 100% identical complaint as in database (accidental re-import of exact same record)
             [
-                'Different Customer Name Allowed', '9999999999', '2026-11-20', 'Damage',
-                'Kurti', 'Online', 'INV-EX-999', 'High', 'Submitted',
+                'Existing Client', '9876500001', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-EX-999', 'Medium', 'Submitted',
                 '', '', '', '', 'Inspection pending', 'Identical torn seam', '', '', '500.00', ''
             ],
             # 2. Fresh valid complaint
@@ -314,19 +314,19 @@ class TestExcelImportModule(unittest.TestCase):
                 'Kurti', 'Online', 'INV-FRESH-01', 'High', 'Submitted',
                 '', '', '', '', 'New remark', 'New detail', '', '', '200.00', ''
             ],
-            # 3. Duplicate row in same uploaded file (accidental duplicate of row 2)
+            # 3. Duplicate row in same uploaded file (exact 100% identical duplicate of row 2)
             [
                 'Customer A', '9876500002', '2026-11-20', 'Damage',
                 'Kurti', 'Online', 'INV-FRESH-01', 'High', 'Submitted',
                 '', '', '', '', 'New remark', 'New detail', '', '', '200.00', ''
             ],
-            # 4. Row with duplicate explicit Record/Complaint ID in file
+            # 4. Row with explicit Record ID in file
             [
                 'Customer B', '9876500003', '2026-11-20', 'Quality',
                 'Saree', 'Offline', 'INV-REC-01', 'Medium', 'Submitted',
                 '', '', '', '', '', '', '', '', '', '', 'REC-REPEAT-01'
             ],
-            # 5. Row with same explicit Record ID
+            # 5. Row with same duplicate explicit Record ID
             [
                 'Customer C', '9876500004', '2026-11-20', 'Wrong Product',
                 'Saree', 'Offline', 'INV-REC-02', 'Medium', 'Submitted',
@@ -342,13 +342,72 @@ class TestExcelImportModule(unittest.TestCase):
         self.assertEqual(result['invalid_count'], 3)
 
         err_row1 = ' '.join(result['invalid_rows'][0]['errors'])
-        self.assertIn("Exact matching complaint already exists in database", err_row1)
+        self.assertIn("identical complaint record already exists in database", err_row1.lower())
 
         err_row3 = ' '.join(result['invalid_rows'][1]['errors'])
-        self.assertIn("Identical complaint record already present in this batch", err_row3)
+        self.assertIn("identical complaint record already exists in this batch", err_row3.lower())
 
         err_row5 = ' '.join(result['invalid_rows'][2]['errors'])
-        self.assertIn("Duplicate Record ID 'REC-REPEAT-01' in uploaded file", err_row5)
+        self.assertIn("duplicate record id 'rec-repeat-01'", err_row5.lower())
+
+    def test_allow_duplicate_entries_until_every_single_thing_is_same(self):
+        """
+        Verify: Users can enter duplicate entries as much as they want,
+        and records are accepted as valid UNTIL every single field is 100% identical.
+        """
+        rows = [
+            # Base record 1
+            [
+                'Pooja Sharma', '9876511111', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-DUP-100', 'High', 'Submitted',
+                'Apparel', 'Vendor Alpha', 'Nikita Vaishnav', '', 'First note', 'Torn seam', '', '', '100.00', ''
+            ],
+            # Record 2: Same customer, phone, date, dept, from-dept, invoice, vendor, sp, details, remarks, BUT different type
+            [
+                'Pooja Sharma', '9876511111', '2026-11-20', 'Quality',
+                'Kurti', 'Online', 'INV-DUP-100', 'High', 'Submitted',
+                'Apparel', 'Vendor Alpha', 'Nikita Vaishnav', '', 'First note', 'Torn seam', '', '', '100.00', ''
+            ],
+            # Record 3: Same customer, phone, date, dept, invoice, type, but different details
+            [
+                'Pooja Sharma', '9876511111', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-DUP-100', 'High', 'Submitted',
+                'Apparel', 'Vendor Alpha', 'Nikita Vaishnav', '', 'First note', 'Missing button', '', '', '100.00', ''
+            ],
+            # Record 4: Same customer, phone, date, dept, invoice, type, details, but different GR amount
+            [
+                'Pooja Sharma', '9876511111', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-DUP-100', 'High', 'Submitted',
+                'Apparel', 'Vendor Alpha', 'Nikita Vaishnav', '', 'First note', 'Torn seam', '', '', '250.00', ''
+            ],
+            # Record 5: Same customer, phone, date, dept, invoice, type, details, GR amount, but different vendor
+            [
+                'Pooja Sharma', '9876511111', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-DUP-100', 'High', 'Submitted',
+                'Apparel', 'Vendor Beta', 'Nikita Vaishnav', '', 'First note', 'Torn seam', '', '', '100.00', ''
+            ],
+            # Record 6: Same customer, phone, date, dept, invoice, type, details, vendor, but different customer name (e.g. shared invoice)
+            [
+                'Sunita Sharma', '9876522222', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-DUP-100', 'High', 'Submitted',
+                'Apparel', 'Vendor Alpha', 'Nikita Vaishnav', '', 'First note', 'Torn seam', '', '', '100.00', ''
+            ],
+            # Record 7: Exact 100% clone of Record 1 (EVERY SINGLE FIELD IS IDENTICAL) -> Rejected!
+            [
+                'Pooja Sharma', '9876511111', '2026-11-20', 'Damage',
+                'Kurti', 'Online', 'INV-DUP-100', 'High', 'Submitted',
+                'Apparel', 'Vendor Alpha', 'Nikita Vaishnav', '', 'First note', 'Torn seam', '', '', '100.00', ''
+            ]
+        ]
+        stream = create_test_excel_file(rows)
+        result = ExcelImportService.parse_and_validate(stream, self.super_admin_user, MockSheetsDB)
+
+        # Records 1 to 6 are all valid because at least one field differs!
+        self.assertEqual(result['valid_count'], 6)
+        # Record 7 is the only invalid row because every single thing is identical to Record 1
+        self.assertEqual(result['invalid_count'], 1)
+        err_msg = ' '.join(result['invalid_rows'][0]['errors']).lower()
+        self.assertIn("identical complaint record already exists in this batch", err_msg)
 
     def test_parse_and_validate_mandatory_fields(self):
         """Verify missing required fields (Customer, Mobile, Date, Department) are rejected."""

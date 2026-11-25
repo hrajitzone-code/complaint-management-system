@@ -1515,15 +1515,19 @@ def lodge_complaint():
         except ValueError:
             return jsonify({'status': 'error', 'message': 'GR Amount must be a valid numeric amount.'}), 400
 
-    # Duplicate submission guard (10-second debounce window per user/subject/description)
-    sub_key = f"{user['email']}:{complain_types.lower()}:{complain_details.lower()}"
+    # Rapid double-click debounce guard on exact 100% identical submission
+    sub_key = (
+        f"{user['email']}:{customer_name.strip().lower()}:{customer_mobile_no.strip()}:"
+        f"{invoice_no.strip().lower()}:{complain_types.strip().lower()}:"
+        f"{complain_details.strip().lower()}:{department.strip().lower()}:{complain_date.strip()}"
+    )
     now_ts = time.time()
     with _submission_lock:
         last_ts = _recent_submissions.get(sub_key, 0)
-        if now_ts - last_ts < 10:
+        if now_ts - last_ts < 2:
             return jsonify({
                 'status': 'error',
-                'message': 'Duplicate complaint detected. Please wait a moment before submitting identical details.'
+                'message': 'Duplicate complaint submission detected. Please wait a moment before re-submitting identical details.'
             }), 409
         _recent_submissions[sub_key] = now_ts
 

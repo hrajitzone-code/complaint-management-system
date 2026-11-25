@@ -601,7 +601,7 @@ class ExcelImportService:
             except Exception as e:
                 logger.warning(f"Could not load active salespersons: {e}")
 
-            # 4. Existing complaints for True Duplicate checking
+            # 4. Existing complaints for True Duplicate checking (Blocked ONLY when every single field is identical)
             try:
                 existing = db_engine.get_all_complaints()
                 for ec in existing:
@@ -609,20 +609,46 @@ class ExcelImportService:
                     if cid:
                         existing_complaint_ids.add(cid)
                     rec_id = str(ec.get('Record ID') or ec.get('Import ID') or '').strip().upper()
-                    if rec_id:
+                    if rec_id and rec_id not in ('-', 'N/A', 'NA', 'NONE', 'NULL'):
                         existing_record_ids.add(rec_id)
 
-                    # Non-customer fingerprint: invoice + dept + from_dept + type + date + details + remarks + gr
-                    ec_inv = str(ec.get('Invoice No.') or '').strip().lower()
-                    ec_dept = str(ec.get('Department Name') or '').strip().lower()
-                    ec_from = str(ec.get('From Department') or '').strip().lower()
-                    ec_type = str(ec.get('Complain Types') or '').strip().lower()
+                    # 100% full-record identical fingerprint: ALL fields must be identical
+                    ec_cname = str(ec.get('Customer Name') or '').strip().lower()
+                    ec_mob_raw = str(ec.get('Customer Mobile No.') or ec.get('Customer Mobile') or '').strip()
+                    ec_mob = re.sub(r'\D', '', ec_mob_raw)
+                    if len(ec_mob) > 10:
+                        ec_mob = ec_mob[-10:]
                     ec_date = str(ec.get('Complain Date') or '').strip()
+                    ec_type = str(ec.get('Complain Types') or '').strip().lower()
+                    ec_dept = str(ec.get('Department Name') or ec.get('Department') or '').strip().lower()
+                    ec_from = str(ec.get('From Department') or 'None').strip().lower()
+                    if not ec_from:
+                        ec_from = 'none'
+                    ec_inv = str(ec.get('Invoice No.') or '').strip().lower()
+                    ec_cat = str(ec.get('Category') or '').strip().lower()
+                    ec_vendor = str(ec.get('Vendor Name') or ec.get('Vendor') or '').strip().lower()
+                    ec_sp = str(ec.get('Salesperson Name') or ec.get('Salesperson') or '').strip().lower()
                     ec_details = str(ec.get('Complain Details') or '').strip().lower()
                     ec_remarks = str(ec.get('Remarks') or '').strip().lower()
-                    ec_gr = str(ec.get('GR Amount') or '').strip()
+                    ec_prio = str(ec.get('Priority') or 'Medium').strip().lower()
+                    ec_status = str(ec.get('Status') or 'Submitted').strip().lower()
+                    ec_handler = str(ec.get('Handled By') or '').strip().lower()
+                    if ec_handler in ('unassigned', 'none', ''):
+                        ec_handler = ''
+                    ec_gr_raw = str(ec.get('GR Amount') or '0.00').strip()
+                    try:
+                        ec_gr = f"{float(ec_gr_raw.replace(',', '')):.2f}"
+                    except Exception:
+                        ec_gr = "0.00"
+                    ec_closing = str(ec.get('Closing Date') or '').strip()
+                    ec_sol = str(ec.get('Solution Given') or '').strip().lower()
+                    ec_gr_exp = str(ec.get('GR Expected Date') or '').strip()
 
-                    fp = f"{ec_inv}|{ec_dept}|{ec_from}|{ec_type}|{ec_date}|{ec_details}|{ec_remarks}|{ec_gr}"
+                    fp = (
+                        f"{ec_cname}|{ec_mob}|{ec_date}|{ec_type}|{ec_dept}|{ec_from}|{ec_inv}|"
+                        f"{ec_cat}|{ec_vendor}|{ec_sp}|{ec_details}|{ec_remarks}|{ec_prio}|"
+                        f"{ec_status}|{ec_handler}|{ec_gr}|{ec_closing}|{ec_sol}|{ec_gr_exp}"
+                    )
                     existing_record_fingerprints.add(fp)
             except Exception as e:
                 logger.warning(f"Could not load existing complaints for duplicate check: {e}")
@@ -776,8 +802,11 @@ class ExcelImportService:
             except ValueError:
                 errors.append(f"GR Amount '{raw_gr}' must be numeric.")
 
-        # 14. True Duplicate Protection (NEVER blocked by customer name or mobile number!)
+        # 14. True Duplicate Protection (Allow duplicate entries until EVERY SINGLE THING is identical)
         row_record_id = str(row_dict.get('record_id') or row_dict.get('complaint_id') or '').strip()
+        if row_record_id.lower() in ('-', 'n/a', 'na', 'none', 'null'):
+            row_record_id = ''
+
         if row_record_id:
             rec_upper = row_record_id.upper()
             if rec_upper in in_file_record_ids:
@@ -787,12 +816,28 @@ class ExcelImportService:
             else:
                 in_file_record_ids.add(rec_upper)
         else:
-            # Exact payload fingerprint (independent of customer name and mobile)
-            exact_fingerprint = f"{c_inv.lower()}|{canon_dept.lower()}|{canon_from.lower()}|{c_type.lower()}|{c_date}|{c_details.lower()}|{c_remarks.lower()}|{gr_val_str}"
+            # 100% Identical Duplicate Check (Blocked ONLY when every single field is identical)
+            mob_digits = re.sub(r'\D', '', mob_val)
+            if len(mob_digits) > 10:
+                mob_digits = mob_digits[-10:]
+
+            cat_clean = str(row_dict.get('category') or '').strip().lower()
+            vendor_clean = str(row_dict.get('vendor_name') or '').strip().lower()
+            handler_clean = str(row_dict.get('handled_by') or '').strip().lower()
+            sol_clean = str(row_dict.get('solution_given') or '').strip().lower()
+            gr_exp_clean = str(c_gr_date or '').strip()
+
+            exact_fingerprint = (
+                f"{c_name_display.lower()}|{mob_digits}|{date_val}|{c_type.lower()}|"
+                f"{canon_dept.lower()}|{canon_from.lower()}|{c_inv.lower()}|"
+                f"{cat_clean}|{vendor_clean}|{canon_sp.lower()}|{c_details.lower()}|"
+                f"{c_remarks.lower()}|{canon_prio.lower()}|{canon_status.lower()}|"
+                f"{handler_clean}|{gr_val_str}|{c_closing or ''}|{sol_clean}|{gr_exp_clean}"
+            )
             if exact_fingerprint in in_file_fingerprints:
-                errors.append("Duplicate complaint in uploaded file: Identical complaint record already present in this batch.")
+                errors.append("Duplicate complaint in uploaded file: An exact 100% identical complaint record already exists in this batch.")
             elif exact_fingerprint in existing_record_fingerprints:
-                errors.append("Duplicate complaint: Exact matching complaint already exists in database (accidental re-import blocked).")
+                errors.append("Duplicate complaint: An exact 100% identical complaint record already exists in database (accidental re-import blocked).")
             else:
                 in_file_fingerprints.add(exact_fingerprint)
 
