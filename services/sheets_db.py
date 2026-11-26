@@ -41,13 +41,16 @@ def execute_with_retry(fn, max_retries=5, initial_delay=2.0, backoff_factor=2.0)
         except Exception as e:
             last_err = e
             err_str = str(e).lower()
+            # Do NOT retry permanent permission, authorization or storage quota errors
+            if '403' in err_str or 'storage quota' in err_str or 'permission denied' in err_str or 'invalid_grant' in err_str:
+                raise e
             is_transient = any(tok in err_str for tok in [
-                '429', 'quota', 'rate limit', '500', '502', '503', 'timed out', 'connection reset', 'transport error'
+                '429', 'rate limit', '500', '502', '503', 'timed out', 'connection reset', 'transport error', 'quota exceeded'
             ])
             if not is_transient or attempt == max_retries:
                 raise e
-            wait_time = max(delay, 5.0) if ('quota' in err_str or '429' in err_str) else delay
-            logger.warning(f"Google API transient/quota error ({e}), backing off {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})...")
+            wait_time = max(delay, 5.0) if ('rate limit' in err_str or '429' in err_str or 'quota exceeded' in err_str) else delay
+            logger.warning(f"Google API transient error ({e}), backing off {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})...")
             time.sleep(wait_time)
             delay = wait_time * backoff_factor
     raise last_err
@@ -145,6 +148,8 @@ class SheetsDB:
     No SQL database dependencies. All persistent business data is managed in Google Sheets.
     """
     _spreadsheet_instance = None
+    _worksheets_ensured = False
+    _worksheet_cache = {}
     _last_init_time = 0
     _cache = {}
     _cache_ttl = 5 # seconds
@@ -156,23 +161,37 @@ class SheetsDB:
         if cls._spreadsheet_instance and not force_refresh:
             return cls._spreadsheet_instance
 
+        if force_refresh:
+            with cls._db_lock:
+                cls._spreadsheet_instance = None
+                cls._worksheet_cache.clear()
+                cls._worksheets_ensured = False
+
         gc = get_gspread_client()
 
         # 1. Try explicit spreadsheet ID from config if provided
         if Config.COMPLAINTS_SPREADSHEET_ID:
             try:
-                sh = gc.open_by_key(Config.COMPLAINTS_SPREADSHEET_ID)
+                sh = execute_with_retry(lambda: gc.open_by_key(Config.COMPLAINTS_SPREADSHEET_ID))
                 cls._spreadsheet_instance = sh
-                cls._ensure_worksheets(sh)
+                if not cls._worksheets_ensured:
+                    cls._ensure_worksheets(sh)
+                    cls._worksheets_ensured = True
                 return sh
             except Exception as e:
-                logger.warning(f"Could not open spreadsheet by COMPLAINTS_SPREADSHEET_ID ({Config.COMPLAINTS_SPREADSHEET_ID}): {e}")
+                logger.error(f"Failed to open fixed database COMPLAINTS_SPREADSHEET_ID ({Config.COMPLAINTS_SPREADSHEET_ID}): {e}")
+                raise RuntimeError(
+                    f"Google Sheets connection failed: {str(e)}. "
+                    f"Please verify spreadsheet '{Config.COMPLAINTS_SPREADSHEET_ID}' permissions and Google Sheets API quota."
+                ) from e
 
-        # 2. Try opening by exact title
+        # 2. Try opening by exact title (only if COMPLAINTS_SPREADSHEET_ID is not configured)
         try:
-            sh = gc.open(Config.SPREADSHEET_NAME)
+            sh = execute_with_retry(lambda: gc.open(Config.SPREADSHEET_NAME))
             cls._spreadsheet_instance = sh
-            cls._ensure_worksheets(sh)
+            if not cls._worksheets_ensured:
+                cls._ensure_worksheets(sh)
+                cls._worksheets_ensured = True
             return sh
         except Exception:
             pass
@@ -184,6 +203,7 @@ class SheetsDB:
                 sh = gc.create(Config.SPREADSHEET_NAME, folder_id=Config.GOOGLE_DRIVE_FOLDER_ID)
                 cls._spreadsheet_instance = sh
                 cls._ensure_worksheets(sh)
+                cls._worksheets_ensured = True
                 return sh
             except Exception as create_err:
                 logger.error(f"Failed to create spreadsheet in Drive folder: {create_err}")
@@ -193,6 +213,7 @@ class SheetsDB:
             sh = gc.create(Config.SPREADSHEET_NAME)
             cls._spreadsheet_instance = sh
             cls._ensure_worksheets(sh)
+            cls._worksheets_ensured = True
             return sh
         except Exception as e:
             raise RuntimeError(
@@ -205,7 +226,20 @@ class SheetsDB:
     @classmethod
     def _ensure_worksheets(cls, sh):
         """Guarantees that all required sheets and canonical headers exist."""
-        existing_sheets = {ws.title: ws for ws in sh.worksheets()}
+        try:
+            worksheets = execute_with_retry(lambda: sh.worksheets())
+            existing_sheets = {ws.title: ws for ws in worksheets}
+        except Exception as e:
+            logger.warning(f"Could not list worksheets during _ensure_worksheets: {e}")
+            return
+
+        # Cache existing worksheet references
+        cls._worksheet_cache.update(existing_sheets)
+
+        # Fast path: If all canonical worksheets are already present, skip expensive row/cell checks
+        all_canonical_present = all(title in existing_sheets for title in SHEET_SCHEMAS.keys())
+        if all_canonical_present:
+            return
 
         for title, headers in SHEET_SCHEMAS.items():
             if title not in existing_sheets:
@@ -213,6 +247,7 @@ class SheetsDB:
                 ws = sh.add_worksheet(title=title, rows=100, cols=len(headers) + 2)
                 ws.append_row(sanitize_row(headers), value_input_option='USER_ENTERED')
                 existing_sheets[title] = ws
+                cls._worksheet_cache[title] = ws
             else:
                 ws = existing_sheets[title]
                 first_row = ws.row_values(1)
@@ -294,9 +329,14 @@ class SheetsDB:
 
     @classmethod
     def _get_worksheet(cls, name):
-        """Returns the specific worksheet instance."""
-        sh = cls.get_spreadsheet()
-        return execute_with_retry(lambda: sh.worksheet(name))
+        """Returns the specific worksheet instance with process-level caching."""
+        with cls._db_lock:
+            if name in cls._worksheet_cache:
+                return cls._worksheet_cache[name]
+            sh = cls.get_spreadsheet()
+            ws = execute_with_retry(lambda: sh.worksheet(name))
+            cls._worksheet_cache[name] = ws
+            return ws
 
     @classmethod
     def _read_records(cls, sheet_name, use_cache=True):
