@@ -1460,151 +1460,190 @@ def lodge_complaint():
     Lodges a new complaint with all 21 fields, unique ID, timestamp, and optional attachment.
     Writes directly to Google Sheets Complaints & Status History worksheets.
     """
-    user = get_current_user()
-    
-    # Handle both multipart/form-data (with file), urlencoded form, and application/json
-    if request.is_json:
-        raw_data = request.get_json(silent=True) or {}
-        file_obj = None
-    else:
-        raw_data = request.form.to_dict()
-        file_obj = request.files.get('attachment')
-
-    # Extract all 21 fields (support canonical & snake_case/legacy aliases)
-    employee_name = (raw_data.get('employee_name') or raw_data.get('Employee Name') or user['name']).strip()
-    complain_date = (raw_data.get('complain_date') or raw_data.get('Complain Date') or datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')).strip()
-    customer_name = (raw_data.get('customer_name') or raw_data.get('Customer Name') or raw_data.get('complainant_name') or user['name']).strip()
-    invoice_no = (raw_data.get('invoice_no') or raw_data.get('Invoice No.') or '').strip()
-    complain_types = (raw_data.get('complain_types') or raw_data.get('Complain Types') or raw_data.get('subject') or '').strip()
-    priority = (raw_data.get('priority') or raw_data.get('Priority') or 'Medium').strip().capitalize()
-    remarks = (raw_data.get('remarks') or raw_data.get('Remarks') or '').strip()
-    complain_details = (raw_data.get('complain_details') or raw_data.get('Complain Details') or raw_data.get('description') or '').strip()
-    customer_mobile_no = (raw_data.get('customer_mobile_no') or raw_data.get('Customer Mobile No.') or '').strip()
-    department_name = (raw_data.get('department_name') or raw_data.get('Department Name') or raw_data.get('department') or '').strip()
-    category = (raw_data.get('category') or raw_data.get('Category') or '').strip()
-    vendor_name = (raw_data.get('vendor_name') or raw_data.get('Vendor Name') or '').strip()
-    salesperson_name = (raw_data.get('salesperson_name') or raw_data.get('Salesperson Name') or '').strip()
-    status = (raw_data.get('status') or raw_data.get('Status') or 'Submitted').strip()
-    closing_date = (raw_data.get('closing_date') or raw_data.get('Closing Date') or '').strip()
-    solution_given = (raw_data.get('solution_given') or raw_data.get('Solution Given') or '').strip()
-    handled_by = (raw_data.get('handled_by') or raw_data.get('Handled By') or 'Unassigned').strip()
-    total_time_taken = (raw_data.get('total_time_taken') or raw_data.get('Total Time Taken') or '').strip()
-    comments = (raw_data.get('comments') or raw_data.get('Comments') or '').strip()
-    gr_amount = str(raw_data.get('gr_amount') or raw_data.get('GR Amount') or '').strip()
-    gr_expected_date = (raw_data.get('gr_expected_date') or raw_data.get('GR Expected Date') or '').strip()
-    attachment_link = (raw_data.get('attachment_link') or raw_data.get('Attachment Link') or '').strip()
-    from_department = (raw_data.get('from_department') or raw_data.get('From Department') or 'None').strip()
-
-    # Form Validation
-    if not customer_name:
-        return jsonify({'status': 'error', 'message': 'Customer Name is required.'}), 400
-    if not department_name:
-        return jsonify({'status': 'error', 'message': 'Department Name is required.'}), 400
-    if not complain_types:
-        return jsonify({'status': 'error', 'message': 'Complain Types is required.'}), 400
-    if not complain_details:
-        return jsonify({'status': 'error', 'message': 'Complain Details is required.'}), 400
-    if from_department not in ('Online', 'Offline', 'Packing', 'None'):
-        return jsonify({'status': 'error', 'message': f"Invalid From Department '{from_department}'. Must be one of: Online, Offline, Packing, None."}), 400
-
-    if gr_amount:
-        try:
-            val = float(gr_amount)
-            if val < 0:
-                return jsonify({'status': 'error', 'message': 'GR Amount must be a positive number.'}), 400
-        except ValueError:
-            return jsonify({'status': 'error', 'message': 'GR Amount must be a valid numeric amount.'}), 400
-
-    # Rapid double-click debounce guard on exact 100% identical submission
-    sub_key = (
-        f"{user['email']}:{customer_name.strip().lower()}:{customer_mobile_no.strip()}:"
-        f"{invoice_no.strip().lower()}:{complain_types.strip().lower()}:"
-        f"{complain_details.strip().lower()}:{department.strip().lower()}:{complain_date.strip()}"
-    )
-    now_ts = time.time()
-    with _submission_lock:
-        last_ts = _recent_submissions.get(sub_key, 0)
-        if now_ts - last_ts < 2:
-            return jsonify({
-                'status': 'error',
-                'message': 'Duplicate complaint submission detected. Please wait a moment before re-submitting identical details.'
-            }), 409
-        _recent_submissions[sub_key] = now_ts
-
-    # Process attachment if provided (file upload or direct link)
-    if file_obj and file_obj.filename:
-        try:
-            upload_res = upload_attachment(file_obj)
-            if upload_res:
-                attachment_link = upload_res.get('web_link', '')
-        except (ValueError, RuntimeError) as r_err:
-            logger.error(f"Attachment upload failed: {r_err}")
-            return jsonify({'status': 'error', 'message': str(r_err)}), 400
-        except Exception as e:
-            logger.error(f"Unexpected error uploading attachment: {e}")
-            return jsonify({
-                'status': 'error',
-                'message': f"Google Drive attachment upload failed: {str(e)}. Please retry."
-            }), 502
-
-    db = get_db()
+    sub_key = None
     try:
-        record = db.lodge_complaint(
-            employee_name=employee_name,
-            complain_date=complain_date,
-            customer_name=customer_name,
-            invoice_no=invoice_no,
-            complain_types=complain_types,
-            priority=priority,
-            remarks=remarks,
-            complain_details=complain_details,
-            customer_mobile_no=customer_mobile_no,
-            department_name=department_name,
-            category=category,
-            vendor_name=vendor_name,
-            salesperson_name=salesperson_name,
-            status=status,
-            closing_date=closing_date,
-            solution_given=solution_given,
-            handled_by=handled_by,
-            total_time_taken=total_time_taken,
-            comments=comments,
-            gr_amount=gr_amount,
-            gr_expected_date=gr_expected_date,
-            attachment_link=attachment_link,
-            from_department=from_department,
-            complainant_email=user['email']
+        user = get_current_user() or {}
+        user_email = (user.get('email') or '').strip().lower()
+        user_name = (user.get('name') or user.get('Full Name') or 'Staff').strip()
+
+        # Handle both multipart/form-data (with file), urlencoded form, and application/json
+        if request.is_json:
+            raw_data = request.get_json(silent=True) or {}
+            file_obj = None
+        else:
+            raw_data = request.form.to_dict()
+            file_obj = request.files.get('attachment')
+
+        # Extract all 21 fields (support canonical & snake_case/legacy aliases)
+        employee_name = (raw_data.get('employee_name') or raw_data.get('Employee Name') or user_name).strip()
+        complain_date = (raw_data.get('complain_date') or raw_data.get('Complain Date') or datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')).strip()
+        customer_name = (raw_data.get('customer_name') or raw_data.get('Customer Name') or raw_data.get('complainant_name') or '').strip()
+        if not customer_name and user.get('role') == 'End User':
+            customer_name = user_name
+        invoice_no = (raw_data.get('invoice_no') or raw_data.get('Invoice No.') or '').strip()
+        complain_types = (raw_data.get('complain_types') or raw_data.get('Complain Types') or raw_data.get('subject') or '').strip()
+        priority = (raw_data.get('priority') or raw_data.get('Priority') or 'Medium').strip().capitalize()
+        remarks = (raw_data.get('remarks') or raw_data.get('Remarks') or '').strip()
+        complain_details = (raw_data.get('complain_details') or raw_data.get('Complain Details') or raw_data.get('description') or '').strip()
+        customer_mobile_no = (raw_data.get('customer_mobile_no') or raw_data.get('Customer Mobile No.') or '').strip()
+        department_name = (raw_data.get('department_name') or raw_data.get('Department Name') or raw_data.get('department') or '').strip()
+        category = (raw_data.get('category') or raw_data.get('Category') or '').strip()
+        vendor_name = (raw_data.get('vendor_name') or raw_data.get('Vendor Name') or '').strip()
+        salesperson_name = (raw_data.get('salesperson_name') or raw_data.get('Salesperson Name') or '').strip()
+        status = (raw_data.get('status') or raw_data.get('Status') or 'Submitted').strip()
+        closing_date = (raw_data.get('closing_date') or raw_data.get('Closing Date') or '').strip()
+        solution_given = (raw_data.get('solution_given') or raw_data.get('Solution Given') or '').strip()
+        handled_by = (raw_data.get('handled_by') or raw_data.get('Handled By') or 'Unassigned').strip()
+        total_time_taken = (raw_data.get('total_time_taken') or raw_data.get('Total Time Taken') or '').strip()
+        comments = (raw_data.get('comments') or raw_data.get('Comments') or '').strip()
+        gr_amount = str(raw_data.get('gr_amount') or raw_data.get('GR Amount') or '').strip()
+        gr_expected_date = (raw_data.get('gr_expected_date') or raw_data.get('GR Expected Date') or '').strip()
+        attachment_link = (raw_data.get('attachment_link') or raw_data.get('Attachment Link') or '').strip()
+        from_department = (raw_data.get('from_department') or raw_data.get('From Department') or 'None').strip()
+
+        # Form Validation
+        if not customer_name:
+            return jsonify({'status': 'error', 'message': 'Customer Name is required.'}), 400
+        if not department_name:
+            return jsonify({'status': 'error', 'message': 'Department Name is required.'}), 400
+        if not complain_types:
+            return jsonify({'status': 'error', 'message': 'Complain Types is required.'}), 400
+        if not complain_details:
+            return jsonify({'status': 'error', 'message': 'Complain Details is required.'}), 400
+        if from_department not in ('Online', 'Offline', 'Packing', 'None'):
+            return jsonify({'status': 'error', 'message': f"Invalid From Department '{from_department}'. Must be one of: Online, Offline, Packing, None."}), 400
+
+        if gr_amount:
+            try:
+                val = float(gr_amount)
+                if val < 0:
+                    return jsonify({'status': 'error', 'message': 'GR Amount must be a positive number.'}), 400
+            except ValueError:
+                return jsonify({'status': 'error', 'message': 'GR Amount must be a valid numeric amount.'}), 400
+
+        # Rapid double-click debounce and retry guard on exact 100% identical submission
+        sub_key = (
+            f"{user_email}:{customer_name.strip().lower()}:{customer_mobile_no.strip()}:"
+            f"{invoice_no.strip().lower()}:{complain_types.strip().lower()}:"
+            f"{complain_details.strip().lower()}:{department_name.strip().lower()}:{complain_date.strip()}"
         )
-
-        try:
-            db.log_audit_event(
-                user_id=user.get('user_id'),
-                user_email=user.get('email'),
-                user_role=user.get('role'),
-                action='COMPLAINT_CREATED',
-                module='COMPLAINTS',
-                record_id=record['Complaint ID'],
-                department=record.get('Department Name'),
-                details=f"Complaint {record['Complaint ID']} created for customer '{customer_name}'.",
-                new_state=json.dumps(record),
-                result='SUCCESS',
-                ip_address=request.remote_addr or ''
-            )
-        except Exception as audit_err:
-            logger.warning(f"Could not write audit log for complaint creation: {audit_err}")
-
-        return jsonify({
-            'status': 'success',
-            'message': f"Complaint {record['Complaint ID']} lodged successfully! It has been saved in Google Sheets.",
-            'complaint': record
-        }), 201
-    except Exception as e:
+        now_ts = time.time()
         with _submission_lock:
-            _recent_submissions.pop(sub_key, None)
-        logger.error(f"Error lodging complaint: {e}")
+            # Purge entries older than 120s
+            expired_keys = [k for k, v in _recent_submissions.items() if now_ts - (v.get('ts', 0) if isinstance(v, dict) else v) > 120]
+            for ek in expired_keys:
+                _recent_submissions.pop(ek, None)
+
+            existing_sub = _recent_submissions.get(sub_key)
+            if existing_sub:
+                sub_ts = existing_sub.get('ts', 0) if isinstance(existing_sub, dict) else existing_sub
+                sub_status = existing_sub.get('status', 'in_progress') if isinstance(existing_sub, dict) else 'in_progress'
+                if sub_status == 'in_progress' and now_ts - sub_ts < 30:
+                    return jsonify({
+                        'status': 'error',
+                        'message': 'Duplicate complaint submission detected. This complaint is currently being processed. Please wait a moment.'
+                    }), 409
+                elif sub_status == 'completed' and now_ts - sub_ts < 60:
+                    completed_rec = existing_sub.get('record')
+                    if completed_rec:
+                        return jsonify({
+                            'status': 'success',
+                            'message': f"Complaint {completed_rec.get('Complaint ID', '')} has already been lodged successfully! It has been saved in Google Sheets.",
+                            'complaint': completed_rec
+                        }), 200
+
+            _recent_submissions[sub_key] = {'ts': now_ts, 'status': 'in_progress'}
+
+        # Process attachment if provided (file upload or direct link)
+        if file_obj and file_obj.filename:
+            try:
+                upload_res = upload_attachment(file_obj)
+                if upload_res:
+                    attachment_link = upload_res.get('web_link', '')
+            except (ValueError, RuntimeError) as r_err:
+                with _submission_lock:
+                    _recent_submissions.pop(sub_key, None)
+                logger.error(f"Attachment upload failed: {r_err}")
+                return jsonify({'status': 'error', 'message': str(r_err)}), 400
+            except Exception as e:
+                with _submission_lock:
+                    _recent_submissions.pop(sub_key, None)
+                logger.error(f"Unexpected error uploading attachment: {e}")
+                return jsonify({
+                    'status': 'error',
+                    'message': f"Google Drive attachment upload failed: {str(e)}. Please retry."
+                }), 502
+
+        db = get_db()
+        try:
+            record = db.lodge_complaint(
+                employee_name=employee_name,
+                complain_date=complain_date,
+                customer_name=customer_name,
+                invoice_no=invoice_no,
+                complain_types=complain_types,
+                priority=priority,
+                remarks=remarks,
+                complain_details=complain_details,
+                customer_mobile_no=customer_mobile_no,
+                department_name=department_name,
+                category=category,
+                vendor_name=vendor_name,
+                salesperson_name=salesperson_name,
+                status=status,
+                closing_date=closing_date,
+                solution_given=solution_given,
+                handled_by=handled_by,
+                total_time_taken=total_time_taken,
+                comments=comments,
+                gr_amount=gr_amount,
+                gr_expected_date=gr_expected_date,
+                attachment_link=attachment_link,
+                from_department=from_department,
+                complainant_email=user_email
+            )
+
+            with _submission_lock:
+                _recent_submissions[sub_key] = {'ts': time.time(), 'status': 'completed', 'record': record}
+
+            try:
+                db.log_audit_event(
+                    user_id=user.get('user_id'),
+                    user_email=user_email,
+                    user_role=user.get('role'),
+                    action='COMPLAINT_CREATED',
+                    module='COMPLAINTS',
+                    record_id=record['Complaint ID'],
+                    department=record.get('Department Name'),
+                    details=f"Complaint {record['Complaint ID']} created for customer '{customer_name}'.",
+                    new_state=json.dumps(record),
+                    result='SUCCESS',
+                    ip_address=request.remote_addr or ''
+                )
+            except Exception as audit_err:
+                logger.warning(f"Could not write audit log for complaint creation: {audit_err}")
+
+            return jsonify({
+                'status': 'success',
+                'message': f"Complaint {record['Complaint ID']} lodged successfully! It has been saved in Google Sheets.",
+                'complaint': record
+            }), 201
+        except Exception as e:
+            with _submission_lock:
+                _recent_submissions.pop(sub_key, None)
+            logger.error(f"Error lodging complaint: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': f"Failed to save complaint to Google Sheets: {str(e)}"
+            }), 500
+    except Exception as top_err:
+        if sub_key:
+            with _submission_lock:
+                _recent_submissions.pop(sub_key, None)
+        logger.error(f"Unhandled error in lodge_complaint: {top_err}", exc_info=True)
         return jsonify({
             'status': 'error',
-            'message': f"Failed to save complaint to Google Sheets: {str(e)}"
+            'message': f"Internal server error lodging complaint: {str(top_err)}"
         }), 500
 
 @app.route('/api/complaints/<complaint_id>', methods=['PUT'])
